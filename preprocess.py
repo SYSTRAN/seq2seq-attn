@@ -74,22 +74,40 @@ def pad(ls, length, symbol):
         
 def get_data(args):
     src_indexer = Indexer(["<blank>","<unk>","<s>","</s>"])
+    pos_indexer = Indexer(["<blank>","<unk>","<s>","</s>"])
     target_indexer = Indexer(["<blank>","<unk>","<s>","</s>"])    
     char_indexer = Indexer(["<blank>","<unk>","{","}"])
     char_indexer.add_w([src_indexer.PAD, src_indexer.UNK, src_indexer.BOS, src_indexer.EOS])
     
-    def make_vocab(srcfile, targetfile, seqlength, max_word_l=0, chars=0):
+    def load_src(src, with_pos):
+        if with_pos == 0:
+            return src, ''
+        src_seq = src.strip().split()
+        src = ''
+        src_pos = ''
+        for entry in src_seq:
+            entry = entry.split('-|-')
+            prefix = ' ' if src else ''
+            src += prefix + entry[0]
+            src_pos += prefix + entry[1]
+        return src, src_pos
+
+    def make_vocab(srcfile, targetfile, seqlength, max_word_l=0, chars=0, with_pos=0):
         num_sents = 0
         for _, (src_orig, targ_orig) in \
                 enumerate(itertools.izip(open(srcfile,'r'), open(targetfile,'r'))):
+            src_orig, src_pos_orig = load_src(src_orig, with_pos)
             if chars == 1: 
                 src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
                 targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
+                with_pos = 0
             else:
                 src_orig = src_indexer.clean(src_orig.strip())
                 targ_orig = target_indexer.clean(targ_orig.strip())                
+                src_pos_orig = pos_indexer.clean(src_pos_orig.strip())
             targ = targ_orig.strip().split()
             src = src_orig.strip().split()
+            src_pos = src_pos_orig.strip().split()
             if len(targ) > seqlength or len(src) > seqlength or len(targ) < 1 or len(src) < 1:
                 continue
             num_sents += 1
@@ -102,7 +120,10 @@ def get_data(args):
                     for char in list(word):
                         char_indexer.vocab[char] += 1                                        
                 target_indexer.vocab[word] += 1
-                
+
+            if with_pos == 1:
+                pos_indexer.add_w(src_pos)
+
             for word in src:
                 if chars == 1:
                     word = char_indexer.clean(word)
@@ -116,12 +137,13 @@ def get_data(args):
         return max_word_l, num_sents
                 
     def convert(srcfile, targetfile, batchsize, seqlength, outfile, num_sents,
-                max_word_l, max_sent_l=0,chars=0, unkfilter=0, shuffle=0):
+                max_word_l, max_sent_l=0,chars=0, unkfilter=0, shuffle=0, with_pos=0):
         
         newseqlength = seqlength + 2 #add 2 for EOS and BOS
         targets = np.zeros((num_sents, newseqlength), dtype=int)
         target_output = np.zeros((num_sents, newseqlength), dtype=int)
         sources = np.zeros((num_sents, newseqlength), dtype=int)
+        sources_pos = np.zeros((num_sents, newseqlength), dtype=int)
         source_lengths = np.zeros((num_sents,), dtype=int)
         target_lengths = np.zeros((num_sents,), dtype=int)
         if chars==1:
@@ -131,14 +153,20 @@ def get_data(args):
         sent_id = 0
         for _, (src_orig, targ_orig) in \
                 enumerate(itertools.izip(open(srcfile,'r'), open(targetfile,'r'))):
+            src_orig, src_pos_orig = load_src(src_orig, with_pos)
             if chars == 1:
                 src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
                 targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
+                with_pos = 0
             else:
                 src_orig = src_indexer.clean(src_orig.strip())
+                src_pos_orig = pos_indexer.clean(src_pos_orig.strip())
                 targ_orig = target_indexer.clean(targ_orig.strip())
             targ = [target_indexer.BOS] + targ_orig.strip().split() + [target_indexer.EOS]
             src =  [src_indexer.BOS] + src_orig.strip().split() + [src_indexer.EOS]
+            src_pos = None
+            if with_pos == 1:
+                src_pos = [pos_indexer.BOS] + src_pos_orig.strip().split() + [pos_indexer.EOS]
             max_sent_l = max(len(targ), len(src), max_sent_l)
             if len(targ) > newseqlength or len(src) > newseqlength or len(targ) < 3 or len(src) < 3:
                 dropped += 1
@@ -173,6 +201,11 @@ def get_data(args):
                     src_char.append(char_idx)
             src = src_indexer.convert_sequence(src)
             src = np.array(src, dtype=int)
+
+            if with_pos == 1:
+                src_pos = pad(src_pos, newseqlength, pos_indexer.PAD)
+                src_pos = pos_indexer.convert_sequence(src_pos)
+                src_pos = np.array(src_pos, dtype=int)
             
             if unkfilter > 0:
                 targ_unks = float((targ[:-1] == 2).sum())
@@ -193,6 +226,8 @@ def get_data(args):
             source_lengths[sent_id] = (sources[sent_id] != 1).sum()            
             if chars == 1:
                 sources_char[sent_id] = np.array(src_char, dtype=int)
+            if with_pos == 1:
+                sources_pos[sent_id] = np.array(src_pos, dtype=int)
 
             sent_id += 1
             if sent_id % 100000 == 0:
@@ -209,6 +244,8 @@ def get_data(args):
             if chars==1:
                 sources_char = sources_char[rand_idx]
                 targets_char = targets_char[rand_idx]
+            if with_pos == 1:
+                sources_pos = sources_pos[rand_idx]
         
         #break up batches based on source lengths
         source_lengths = source_lengths[:sent_id]
@@ -219,6 +256,8 @@ def get_data(args):
         target_output = target_output[source_sort]
         target_l = target_lengths[source_sort]
         source_l = source_lengths[source_sort]
+        if with_pos == 1:
+            sources_pos = sources_pos[source_sort]
 
         curr_l = 0
         l_location = [] #idx where sent length changes
@@ -260,6 +299,9 @@ def get_data(args):
         f["target_nonzeros"] = np.array(nonzeros, dtype=int)
         f["source_size"] = np.array([len(src_indexer.d)])
         f["target_size"] = np.array([len(target_indexer.d)])
+        if with_pos == 1:
+            f["source_pos"] = sources_pos
+            f["pos_size"] = np.array([len(pos_indexer.d)])
         if chars == 1:            
             del sources, targets, target_output
             sources_char = sources_char[source_sort]
@@ -275,10 +317,10 @@ def get_data(args):
 
     print("First pass through data to get vocab...")
     max_word_l, num_sents_train = make_vocab(args.srcfile, args.targetfile,
-                                             args.seqlength, 0, args.chars)
+                                             args.seqlength, 0, args.chars, args.withpos)
     print("Number of sentences in training: {}".format(num_sents_train))
     max_word_l, num_sents_valid = make_vocab(args.srcvalfile, args.targetvalfile,
-                                             args.seqlength, max_word_l, args.chars)
+                                             args.seqlength, max_word_l, args.chars, args.withpos)
     print("Number of sentences in valid: {}".format(num_sents_valid))    
     if args.chars == 1:
         print("Max word length (before cutting): {}".format(max_word_l))
@@ -300,6 +342,8 @@ def get_data(args):
         
     src_indexer.write(args.outputfile + ".src.dict", args.chars)
     target_indexer.write(args.outputfile + ".targ.dict", args.chars)
+    if args.withpos == 1 and args.chars == 0:
+        pos_indexer.write(args.outputfile + ".pos.dict")
     if args.chars == 1:
         if args.charvocabfile == '':
             char_indexer.prune_vocab(500)
@@ -310,14 +354,16 @@ def get_data(args):
                                                           len(src_indexer.d)))
     print("Target vocab size: Original = {}, Pruned = {}".format(len(target_indexer.vocab), 
                                                           len(target_indexer.d)))
+    if args.withpos == 1 and args.chars == 0:
+        print("POS vocab size: {}".format(len(pos_indexer.d)))
 
     max_sent_l = 0
     max_sent_l = convert(args.srcvalfile, args.targetvalfile, args.batchsize, args.seqlength,
                          args.outputfile + "-val.hdf5", num_sents_valid,
-                         max_word_l, max_sent_l, args.chars, args.unkfilter, args.shuffle)
+                         max_word_l, max_sent_l, args.chars, args.unkfilter, args.shuffle, args.withpos)
     max_sent_l = convert(args.srcfile, args.targetfile, args.batchsize, args.seqlength,
                          args.outputfile + "-train.hdf5", num_sents_train, max_word_l,
-                         max_sent_l, args.chars, args.unkfilter, args.shuffle)
+                         max_sent_l, args.chars, args.unkfilter, args.shuffle, args.withpos)
     
     print("Max sent length (before dropping): {}".format(max_sent_l))    
     
@@ -341,6 +387,9 @@ def main(arguments):
                                            "source/target sequence.", required=True)
     parser.add_argument('--srcvalfile', help="Path to source validation data.", required=True)
     parser.add_argument('--targetvalfile', help="Path to target validation data.", required=True)
+    parser.add_argument('--withpos',
+                        help="If = 1, POS tags must be included in the source files",
+                        type = int, default = 0)
     parser.add_argument('--batchsize', help="Size of each minibatch.", type=int, default=64)
     parser.add_argument('--seqlength', help="Maximum sequence length. Sequences longer "
                                                "than this are dropped.", type=int, default=50)

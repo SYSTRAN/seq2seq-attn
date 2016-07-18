@@ -19,6 +19,7 @@ cmd:option('-output_file', 'pred.txt', [[Path to output the predictions (each li
                                        decoded sequence]])
 cmd:option('-src_dict', 'data/demo.src.dict', [[Path to source vocabulary (*.src.dict file)]])
 cmd:option('-targ_dict', 'data/demo.targ.dict', [[Path to target vocabulary (*.targ.dict file)]])
+cmd:option('-pos_dict', '', [[Path to POS vocabulary (*.pos.dict file)]])
 cmd:option('-char_dict', 'data/demo.char.dict', [[If using chars, path to character 
                                                 vocabulary (*.char.dict file)]])
 
@@ -109,7 +110,7 @@ function flat_to_rc(v, flat_index)
    return row, (flat_index - 1) % v:size(2) + 1
 end
 
-function generate_beam(model, initial, K, max_sent_l, source, gold)
+function generate_beam(model, initial, K, max_sent_l, source, source_pos, gold)
    --reset decoder initial states
    if opt.gpuid >= 0 and opt.gpuid2 >= 0 then
       cutorch.setDevice(opt.gpuid)
@@ -135,10 +136,14 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
    end
 
    local source_input
+   local source_pos_input
    if model_opt.use_chars_enc == 1 then
       source_input = source:view(source_l, 1, source:size(2)):contiguous()
    else
       source_input = source:view(source_l, 1)
+      if model_opt.pos_vec_size > 0 then
+         source_pos_input = source_pos:view(source_l, 1)
+      end
    end
 
    local rnn_state_enc = {}
@@ -148,7 +153,12 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
    local context = context_proto[{{}, {1,source_l}}]:clone() -- 1 x source_l x rnn_size
    
    for t = 1, source_l do
-      local encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+      local encoder_input
+      if model_opt.pos_vec_size > 0 then
+         encoder_input = {source_input[t], source_pos_input[t], table.unpack(rnn_state_enc)}
+      else
+         encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+      end
       local out = model[1]:forward(encoder_input)
       rnn_state_enc = out
       context[{{},t}]:copy(out[#out])
@@ -172,7 +182,12 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
 	 rnn_state_enc[i]:zero()
       end      
       for t = source_l, 1, -1 do
-	 local encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+         local encoder_input
+         if model_opt.pos_vec_size > 0 then
+            encoder_input = {source_input[t], source_pos_input[t], table.unpack(rnn_state_enc)}
+         else
+            encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+         end
 	 local out = model[4]:forward(encoder_input)
 	 rnn_state_enc = out
 	 context[{{},t}]:add(out[#out])
@@ -391,6 +406,30 @@ function get_layer(layer)
    end
 end
 
+function load_source(line, with_pos)
+   if with_pos == false then
+      return clean_sent(line), ''
+   end
+
+   local sent = ''
+   local pos = ''
+   for entry in line:gmatch'([^%s]+)' do
+      local field = string.split(entry, '|')
+      local word = string.sub(field[1], 1, -2)
+      local tag = string.sub(field[2], 2, -1)
+      if string.len(word) > 0 and string.len(tag) > 0 then
+         if string.len(sent) == 0 then
+            sent = word
+            pos = tag
+         else
+            sent = sent .. ' ' .. word
+            pos = pos .. ' ' .. tag
+         end
+      end
+   end
+   return clean_sent(sent), clean_sent(pos)
+end
+
 function sent2wordidx(sent, word2idx, start_symbol)
    local t = {}
    local u = {}
@@ -537,6 +576,14 @@ function main()
    word2idx_src = flip_table(idx2word_src)
    idx2word_targ = idx2key(opt.targ_dict)
    word2idx_targ = flip_table(idx2word_targ)
+
+   word2idx_pos = {}
+   idx2word_pos = {}
+
+   if model_opt.pos_vec_size > 0 then
+      idx2word_pos = idx2key(opt.pos_dict)
+      word2idx_pos = flip_table(idx2word_pos)
+   end
    
    -- load character dictionaries if needed
    if model_opt.use_chars_enc == 1 or model_opt.use_chars_dec == 1 then
@@ -631,11 +678,15 @@ function main()
    local out_file = io.open(opt.output_file,'w')   
    for line in file:lines() do
       sent_id = sent_id + 1
-      line = clean_sent(line)      
+      line, pos_line = load_source(line, model_opt.pos_vec_size > 0)
       print('SENT ' .. sent_id .. ': ' ..line)
       local source, source_str
+      local source_pos, source_pos_str
       if model_opt.use_chars_enc == 0 then
 	 source, source_str = sent2wordidx(line, word2idx_src, model_opt.start_symbol)
+         if model_opt.pos_vec_size > 0 then
+            source_pos, source_pos_str = sent2wordidx(pos_line, word2idx_pos, model_opt.start_symbol)
+         end
       else
 	 source, source_str = sent2charidx(line, char2idx, model_opt.max_word_l, model_opt.start_symbol)
       end
@@ -644,7 +695,7 @@ function main()
       end
       state = State.initial(START)
       pred, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(model,
-  		state, opt.beam, MAX_SENT_L, source, target)
+  		state, opt.beam, MAX_SENT_L, source, source_pos, target)
       pred_score_total = pred_score_total + pred_score
       pred_words_total = pred_words_total + #pred - 1
       pred_sent = wordidx2sent(pred, idx2word_targ, source_str, attn, true)

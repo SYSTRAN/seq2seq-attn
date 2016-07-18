@@ -15,9 +15,18 @@ function data:__init(opt, data_file)
    self.target_l_all:add(-1)
    self.batch_l = f:read('batch_l'):all()
    self.source_l = f:read('batch_w'):all() --max source length each batch
+
+   if opt.pos_vec_size > 0 then
+      self.source_pos = f:read('source_pos'):all()
+      self.pos_size = f:read('pos_size'):all()[1]
+   end
+
    if opt.start_symbol == 0 then
       self.source_l:add(-2)
       self.source = self.source[{{},{2, self.source:size(2)-1}}]
+      if opt.pos_vec_size > 0 then
+         self.source_pos = self.source_pos[{{},{2, self.source_pos:size(2)-1}}]
+      end
    end   
    self.batch_idx = f:read('batch_idx'):all()
    
@@ -50,6 +59,11 @@ function data:__init(opt, data_file)
    end   
    for i = 1, self.length do
       local source_i, target_i
+      local source_pos_i
+      if opt.pos_vec_size == 0 then
+         source_pos_i = torch.Tensor()
+      end
+
       local target_output_i = self.target_output:sub(self.batch_idx[i],self.batch_idx[i]
 							+self.batch_l[i]-1, 1, self.target_l[i])
       local target_l_i = self.target_l_all:sub(self.batch_idx[i],
@@ -61,10 +75,18 @@ function data:__init(opt, data_file)
       else
 	 source_i =  self.source:sub(self.batch_idx[i], self.batch_idx[i]+self.batch_l[i]-1,
 				     1, self.source_l[i]):transpose(1,2)
+         if opt.pos_vec_size > 0 then
+            source_pos_i =  self.source_pos:sub(self.batch_idx[i], self.batch_idx[i]+self.batch_l[i]-1,
+                                                1, self.source_l[i]):transpose(1,2)
+         end
       end
       if opt.reverse_src == 1 then
 	 source_i = source_i:index(1, source_l_rev[{{max_source_l-self.source_l[i]+1,
 						     max_source_l}}])
+         if opt.pos_vec_size > 0 then
+            source_pos_i = source_pos_i:index(1, source_l_rev[{{max_source_l-self.source_l[i]+1,
+                                                                max_source_l}}])
+         end
       end      
 
       if opt.use_chars_dec == 1 then
@@ -82,7 +104,8 @@ function data:__init(opt, data_file)
 				  self.batch_l[i],
 				  self.target_l[i],
 				  self.source_l[i],
-				  target_l_i})
+				  target_l_i,
+                                  source_pos_i})
    end
 end
 
@@ -102,9 +125,11 @@ function data.__index(self, idx)
       local target_l = self.batches[idx][6]
       local source_l = self.batches[idx][7]
       local target_l_all = self.batches[idx][8]
+      local source_pos_input = self.batches[idx][9]
       if opt.gpuid >= 0 then --if multi-gpu, source lives in gpuid1, rest on gpuid2
 	 cutorch.setDevice(opt.gpuid)
 	 source_input = source_input:cuda()
+	 source_pos_input = source_pos_input:cuda()
 	 if opt.gpuid2 >= 0 then
 	    cutorch.setDevice(opt.gpuid2)
 	 end	 
@@ -113,7 +138,7 @@ function data.__index(self, idx)
 	 target_l_all = target_l_all:cuda()
       end
       return {target_input, target_output, nonzeros, source_input,
-	      batch_l, target_l, source_l, target_l_all}
+	      batch_l, target_l, source_l, target_l_all, source_pos_input}
    end
 end
 

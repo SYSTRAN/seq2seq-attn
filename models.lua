@@ -33,6 +33,11 @@ function make_lstm(data, opt, model, use_chars)
 	 table.insert(inputs, nn.Identity()()) -- prev context_attn (batch_size x rnn_size)
 	 offset = offset + 1
       end
+   else
+      if opt.pos_vec_size > 0 then
+         table.insert(inputs, nn.Identity()()) -- pos (batch_size x max_word_l)
+         offset = offset + 1
+      end
    end
    for L = 1,n do
       table.insert(inputs, nn.Identity()()) -- prev_c[L]
@@ -49,13 +54,22 @@ function make_lstm(data, opt, model, use_chars)
     if L == 1 then
        if use_chars == 0 then
 	  local word_vecs
+	  local pos_vecs
 	  if model == 'enc' then
-	     word_vecs = nn.LookupTable(data.source_size, input_size)
+             word_vecs = nn.LookupTable(data.source_size, input_size)
+             if opt.pos_vec_size > 0 then
+                pos_vecs = nn.LookupTable(data.pos_size, opt.pos_vec_size)
+                pos_vecs.name = 'pos_vecs' .. name
+             end
 	  else
 	     word_vecs = nn.LookupTable(data.target_size, input_size)
 	  end	  
 	  word_vecs.name = 'word_vecs' .. name
 	  x = word_vecs(inputs[1]) -- batch_size x word_vec_size
+          if opt.pos_vec_size > 0 and model == 'enc' then
+             local pos_x = pos_vecs(inputs[2]) -- batch_size x pos_vec_size
+             x = nn.JoinTable(2)({x, pos_x}) -- batch_size x (word_vec_size + pos_vec_size)
+          end
        else
 	  local char_vecs = nn.LookupTable(data.char_size, opt.char_vec_size)
 	  char_vecs.name = 'word_vecs' .. name
@@ -74,6 +88,10 @@ function make_lstm(data, opt, model, use_chars)
 	     x = nn.JoinTable(2)({x, inputs[1+offset]}) -- batch_size x (word_vec_size + rnn_size)
 	     input_size_L = input_size + rnn_size
 	  end	  
+       else
+          if opt.pos_vec_size > 0 then
+             input_size_L = input_size_L + opt.pos_vec_size
+          end
        end
     else
        x = outputs[(L-1)*2]
