@@ -33,7 +33,6 @@ cmd:text("")
 cmd:option('-num_layers', 2, [[Number of layers in the LSTM encoder/decoder]])
 cmd:option('-rnn_size', 500, [[Size of LSTM hidden states]])
 cmd:option('-word_vec_size', 500, [[Word embedding sizes]])
-cmd:option('-pos_vec_size', 0, [[POS embedding sizes]])
 cmd:option('-attn', 1, [[If = 1, use attention on the decoder side. If = 0, it uses the last
                        hidden state of the decoder as context at each time step.]])
 cmd:option('-brnn', 0, [[If = 1, use a bidirectional RNN. Hidden states of the fwd/bwd
@@ -362,8 +361,7 @@ function train(train_data, valid_data)
 	 end
          local target, target_out, nonzeros, source = d[1], d[2], d[3], d[4]
 	 local batch_l, target_l, source_l = d[5], d[6], d[7]
-         local source_pos = d[9]
-
+	 
 	 local encoder_grads = encoder_grad_proto[{{1, batch_l}, {1, source_l}}]
 	 local encoder_bwd_grads 
 	 if opt.brnn == 1 then
@@ -377,12 +375,7 @@ function train(train_data, valid_data)
 	 -- forward prop encoder
 	 for t = 1, source_l do
 	    encoder_clones[t]:training()
-            local encoder_input
-            if opt.pos_vec_size > 0 then
-               encoder_input = {source[t], source_pos[t], table.unpack(rnn_state_enc[t-1])}
-            else
-               encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
-            end
+	    local encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
 	    local out = encoder_clones[t]:forward(encoder_input)
 	    rnn_state_enc[t] = out
 	    context[{{},t}]:copy(out[#out])
@@ -393,12 +386,7 @@ function train(train_data, valid_data)
 	    rnn_state_enc_bwd = reset_state(init_fwd_enc, batch_l, source_l+1)       	   
 	    for t = source_l, 1, -1 do
 	       encoder_bwd_clones[t]:training()
-               local encoder_input
-               if opt.pos_vec_size > 0 then
-                  encoder_input = {source[t], source_pos[t], table.unpack(rnn_state_enc_bwd[t+1])}
-               else
-                  encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
-               end
+	       local encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
 	       local out = encoder_bwd_clones[t]:forward(encoder_input)
 	       rnn_state_enc_bwd[t] = out
 	       context[{{},t}]:add(out[#out])	       
@@ -516,12 +504,7 @@ function train(train_data, valid_data)
 	 end
 	 
 	 for t = source_l, 1, -1 do
-            local encoder_input
-            if opt.pos_vec_size > 0 then
-               encoder_input = {source[t], source_pos[t], table.unpack(rnn_state_enc[t-1])}
-            else
-               encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
-            end
+	    local encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
 	    if opt.attn == 1 then
 	       drnn_state_enc[#drnn_state_enc]:add(encoder_grads[{{},t}])
 	    else
@@ -530,11 +513,7 @@ function train(train_data, valid_data)
 	       end
 	    end	    		  
 	    local dlst = encoder_clones[t]:backward(encoder_input, drnn_state_enc)
-            local start = 1
-            if opt.pos_vec_size > 0 then
-               start = 2
-            end
-	    for j = start, #drnn_state_enc do
+	    for j = 1, #drnn_state_enc do
 	       drnn_state_enc[j]:copy(dlst[j+1])
 	    end	    
 	 end
@@ -548,12 +527,7 @@ function train(train_data, valid_data)
 	       end
 	    end
 	    for t = 1, source_l do
-               local encoder_input
-               if opt.pos_vec_size > 0 then
-                  encoder_input = {source[t], source_pos[t], table.unpack(rnn_state_enc_bwd[t+1])}
-               else
-                  encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
-               end
+	       local encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
 	       if opt.attn == 1 then
 		  drnn_state_enc[#drnn_state_enc]:add(encoder_bwd_grads[{{},t}])
 	       else
@@ -562,11 +536,7 @@ function train(train_data, valid_data)
 		  end
 	       end
 	       local dlst = encoder_bwd_clones[t]:backward(encoder_input, drnn_state_enc)
-               local start = 1
-               if opt.pos_vec_size > 0 then
-                  start = 2
-               end
-	       for j = start, #drnn_state_enc do
+	       for j = 1, #drnn_state_enc do
 		  drnn_state_enc[j]:copy(dlst[j+1])
 	       end
 	    end	      	    
@@ -709,7 +679,6 @@ function eval(data)
       local d = data[i]
       local target, target_out, nonzeros, source = d[1], d[2], d[3], d[4]
       local batch_l, target_l, source_l = d[5], d[6], d[7]
-      local source_pos = d[9]
       if opt.gpuid >= 0 and opt.gpuid2 >= 0 then
 	 cutorch.setDevice(opt.gpuid)
       end      
@@ -717,12 +686,7 @@ function eval(data)
       local context = context_proto[{{1, batch_l}, {1, source_l}}]
       -- forward prop encoder
       for t = 1, source_l do
-         local encoder_input
-         if opt.pos_vec_size > 0 then
-            encoder_input = {source[t], source_pos[t], table.unpack(rnn_state_enc)}
-         else
-            encoder_input = {source[t], table.unpack(rnn_state_enc)}
-         end
+	 local encoder_input = {source[t], table.unpack(rnn_state_enc)}
 	 local out = encoder_clones[1]:forward(encoder_input)
 	 rnn_state_enc = out
 	 context[{{},t}]:copy(out[#out])
@@ -746,12 +710,7 @@ function eval(data)
       if opt.brnn == 1 then
 	 local rnn_state_enc = reset_state(init_fwd_enc, batch_l)
 	 for t = source_l, 1, -1 do
-            local encoder_input
-            if opt.pos_vec_size > 0 then
-               encoder_input = {source[t], source_pos[t], table.unpack(rnn_state_enc)}
-            else
-               encoder_input = {source[t], table.unpack(rnn_state_enc)}
-            end
+	    local encoder_input = {source[t], table.unpack(rnn_state_enc)}
 	    local out = encoder_bwd_clones[1]:forward(encoder_input)
 	    rnn_state_enc = out
 	    context[{{},t}]:add(out[#out])
@@ -844,10 +803,6 @@ function main()
    opt.max_sent_l = math.max(opt.max_sent_l_src, opt.max_sent_l_targ)
    if opt.max_batch_l == '' then
       opt.max_batch_l = valid_data.batch_l:max()
-   end
-
-   if opt.pos_vec_size > 0 then
-      print(string.format('POS vocab size: %d', valid_data.pos_size))
    end
    
    if opt.use_chars_enc == 1 or opt.use_chars_dec == 1 then
