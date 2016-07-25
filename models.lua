@@ -192,7 +192,7 @@ function make_generator(data, opt)
    local softmax = nn.ParallelTable()
    softmax:add(nn.LogSoftMax())
    for i = 1, data.num_target_features do
-      softmax:add(nn.SoftMax())
+      softmax:add(nn.Sigmoid())
    end
 
    local model = nn.Sequential()
@@ -204,7 +204,9 @@ function make_generator(data, opt)
    w[1] = 0
    criterion:add(nn.ClassNLLCriterion(w))
    for i = 1, data.num_target_features do
-      criterion:add(nn.MSECriterion())
+      w = torch.ones(data.target_features_size[i])
+      w[1] = 0
+      criterion:add(nn.BCECriterion(w))
    end
    return model, criterion
 end
