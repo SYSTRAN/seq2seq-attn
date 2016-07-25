@@ -20,6 +20,7 @@ class Indexer:
         self.BOS = symbols[2]
         self.EOS = symbols[3]
         self.d = {self.PAD: 1, self.UNK: 2, self.BOS: 3, self.EOS: 4}
+        self.max_num_values = 0
 
     def add_w(self, ws):
         for w in ws:
@@ -77,7 +78,7 @@ def save_features(name, indexers, outputfile):
         print("Number of additional features on {} side: {}".format(name, len(indexers)))
     for i in range(len(indexers)):
         indexers[i].write(outputfile + "." + name + "_feature_" + str(i+1) + ".dict", )
-        print(" * {} feature {} of size: {}".format(name, i+1, len(indexers[i].d)))
+        print(" * {} feature {} of size: {} (maximal number of values per word: {})".format(name, i+1, len(indexers[i].d), indexers[i].max_num_values))
 
         
 def get_data(args):
@@ -111,6 +112,7 @@ def get_data(args):
 
                 for i in range(1, len(fields)):
                     values = fields[i].split(',')
+                    indexers[i-1].max_num_values = max(len(values), indexers[i-1].max_num_values)
                     sent_features[i-1].append(values)
 
         return sent_words, sent_features
