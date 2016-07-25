@@ -189,15 +189,15 @@ function make_generator(data, opt)
       split:add(nn.Linear(opt.rnn_size, data.target_features_size[i]))
    end
 
-   local transfer = nn.ParallelTable()
-   transfer:add(nn.LogSoftMax())
+   local softmax = nn.ParallelTable()
+   softmax:add(nn.LogSoftMax())
    for i = 1, data.num_target_features do
-      transfer:add(nn.Sigmoid())
+      softmax:add(nn.Sigmoid())
    end
 
    local model = nn.Sequential()
       :add(split)
-      :add(transfer)
+      :add(softmax)
 
    local criterion = nn.ParallelCriterion(false)
    local w = torch.ones(data.target_size)
