@@ -172,7 +172,7 @@ def get_data(args):
         def init_features_tensor(indexers):
             return [ np.zeros((num_sents,
                                newseqlength,
-                               len(indexers[i].d)), dtype=int)
+                               len(indexers[i].d)), dtype=float)
                      for i in range(len(indexers)) ]
 
         def load_features(orig_features, indexers, seqlength):
@@ -187,8 +187,8 @@ def get_data(args):
                 features[i] = pad(features[i], seqlength, [indexers[i].PAD])
                 for j in range(len(features[i])):
                     features[i][j] = indexers[i].convert_sequence(features[i][j])
-                    features[i][j] = [ 1 if k+1 in features[i][j] else 0 for k in range(len(indexers[i].d)) ]
-                features[i] = np.array(features[i], dtype=int)
+                    features[i][j] = [ 1.0/len(features[i][j]) if k+1 in features[i][j] else 0 for k in range(len(indexers[i].d)) ]
+                features[i] = np.array(features[i], dtype=float)
             return features
 
         newseqlength = seqlength + 2 #add 2 for EOS and BOS
@@ -276,10 +276,10 @@ def get_data(args):
             target_features = load_features(targ_orig_features, target_feature_indexers, newseqlength+1)
 
             for i in range(len(target_feature_indexers)):
-                targets_features[i][sent_id] = np.array(target_features[i][:-1], dtype=int)
-                targets_features_output[i][sent_id] = np.array(target_features[i][1:], dtype=int)
+                targets_features[i][sent_id] = np.array(target_features[i][:-1], dtype=float)
+                targets_features_output[i][sent_id] = np.array(target_features[i][1:], dtype=float)
             for i in range(len(src_feature_indexers)):
-                sources_features[i][sent_id] = np.array(source_features[i], dtype=int)
+                sources_features[i][sent_id] = np.array(source_features[i], dtype=float)
 
             sent_id += 1
             if sent_id % 100000 == 0:
