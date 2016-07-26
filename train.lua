@@ -473,8 +473,11 @@ function train(train_data, valid_data)
             else
                output = {target_out[t]}
             end
-            loss = loss + criterion:forward(pred, output)
+            loss = loss + criterion:forward(pred, output)/batch_l
 	    local dl_dpred = criterion:backward(pred, output)
+            for k = 1, #dl_dpred do
+               dl_dpred[k]:div(batch_l)
+            end
 	    local dl_dtarget = generator:backward(preds[t], dl_dpred)
 	    drnn_state_dec[#drnn_state_dec]:add(dl_dtarget)
 	    local decoder_input

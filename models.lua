@@ -202,9 +202,13 @@ function make_generator(data, opt)
    local criterion = nn.ParallelCriterion(false)
    local w = torch.ones(data.target_size)
    w[1] = 0
-   criterion:add(nn.ClassNLLCriterion(w))
+   local classnll = nn.ClassNLLCriterion(w)
+   classnll.sizeAverage = false
+   criterion:add(classnll)
    for i = 1, data.num_target_features do
-      criterion:add(nn.MSECriterion())
+      local mse = nn.MSECriterion()
+      mse.sizeAverage = false
+      criterion:add(mse)
    end
    return model, criterion
 end
