@@ -147,8 +147,6 @@ function train(train_data, valid_data)
    params, grad_params = {}, {}
    opt.train_perf = {}
    opt.val_perf = {}
-   opt.num_source_features = train_data.num_source_features
-   opt.num_target_features = train_data.num_target_features
    
    for i = 1, #layers do
       if opt.gpuid2 >= 0 then
@@ -285,7 +283,7 @@ function train(train_data, valid_data)
       table.insert(init_bwd_dec, h_init:clone())
    end         
    
-   dec_offset = 3+train_data.num_target_features -- offset depends on input feeding
+   dec_offset = 3 -- offset depends on input feeding
    if opt.input_feed == 1 then
       dec_offset = dec_offset + 1
    end
@@ -346,6 +344,8 @@ function train(train_data, valid_data)
    end   
 
    function train_batch(data, epoch)
+      opt.num_source_features = data.num_source_features
+      opt.num_target_features = data.num_target_features
       local train_nonzeros = 0
       local train_loss = 0	       
       local batch_order = torch.randperm(data.length) -- shuffle mini batch order     
@@ -511,8 +511,9 @@ function train(train_data, valid_data)
 	    if opt.input_feed == 1 then
 	       drnn_state_dec[#drnn_state_dec]:add(dlst[3+data.num_target_features])
 	    end	    
-	    for j = dec_offset, #dlst do
-	       drnn_state_dec[j-dec_offset+1]:copy(dlst[j])
+            local offset = dec_offset+data.num_target_features
+	    for j = offset, #dlst do
+	       drnn_state_dec[j-offset+1]:copy(dlst[j])
 	    end	    
 	 end
          word_vec_layers[2].gradWeight[1]:zero()
