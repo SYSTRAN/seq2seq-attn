@@ -139,6 +139,12 @@ function zero_table(t)
    end
 end
 
+function append_table(dst, src)
+   for i = 1, #src do
+      table.insert(dst, src[i])
+   end
+end
+
 function train(train_data, valid_data)
 
    local timer = torch.Timer()
@@ -378,12 +384,11 @@ function train(train_data, valid_data)
 
 	 for t = 1, source_l do
 	    encoder_clones[t]:training()
-            local encoder_input
+            local encoder_input = {source[t]}
             if data.num_source_features > 0 then
-               encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc[t-1])}
-            else
-               encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
+               append_table(encoder_input, source_features[t])
             end
+            append_table(encoder_input, rnn_state_enc[t-1])
 	    local out = encoder_clones[t]:forward(encoder_input)
 	    rnn_state_enc[t] = out
 	    context[{{},t}]:copy(out[#out])
@@ -394,12 +399,11 @@ function train(train_data, valid_data)
 	    rnn_state_enc_bwd = reset_state(init_fwd_enc, batch_l, source_l+1)       	   
 	    for t = source_l, 1, -1 do
 	       encoder_bwd_clones[t]:training()
-               local encoder_input
+               local encoder_input = {source[t]}
                if data.num_source_features > 0 then
-                  encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc_bwd[t+1])}
-               else
-                  encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
+                  append_table(encoder_input, source_features[t])
                end
+               append_table(encoder_input, rnn_state_enc_bwd[t+1])
 	       local out = encoder_bwd_clones[t]:forward(encoder_input)
 	       rnn_state_enc_bwd[t] = out
 	       context[{{},t}]:add(out[#out])	       
@@ -431,20 +435,16 @@ function train(train_data, valid_data)
 	 local decoder_input
 	 for t = 1, target_l do
 	    decoder_clones[t]:training()
-	    local decoder_input
+	    local decoder_input = {target[t]}
+            if data.num_target_features > 0 then
+               append_table(decoder_input, target_features[t])
+            end
 	    if opt.attn == 1 then
-               if data.num_target_features > 0 then
-                  decoder_input = {target[t], table.unpack(target_features[t]), context, table.unpack(rnn_state_dec[t-1])}
-               else
-                  decoder_input = {target[t], context, table.unpack(rnn_state_dec[t-1])}
-               end
+               append_table(decoder_input, {context})
 	    else
-               if data.num_target_features > 0 then
-                  decoder_input = {target[t], table.unpack(target_features[t]), context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
-               else
-                  decoder_input = {target[t], context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
-               end
-	    end	    
+               append_table(decoder_input, {context[{{}, source_l}]})
+	    end
+            append_table(decoder_input, rnn_state_dec[t-1])
 	    local out = decoder_clones[t]:forward(decoder_input)
 	    local next_state = {}
 	    table.insert(preds, out[#out])
@@ -480,20 +480,16 @@ function train(train_data, valid_data)
             end
 	    local dl_dtarget = generator:backward(preds[t], dl_dpred)
 	    drnn_state_dec[#drnn_state_dec]:add(dl_dtarget)
-	    local decoder_input
+	    local decoder_input = {target[t]}
+            if data.num_target_features > 0 then
+               append_table(decoder_input, target_features[t])
+            end
 	    if opt.attn == 1 then
-               if data.num_target_features > 0 then
-                  decoder_input = {target[t], table.unpack(target_features[t]), context, table.unpack(rnn_state_dec[t-1])}
-               else
-                  decoder_input = {target[t], context, table.unpack(rnn_state_dec[t-1])}
-               end
+               append_table(decoder_input, {context})
 	    else
-               if data.num_target_features > 0 then
-                  decoder_input = {target[t], table.unpack(target_features[t]), context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
-               else
-                  decoder_input = {target[t], context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
-               end
-            end	    
+               append_table(decoder_input, {context[{{}, source_l}]})
+	    end
+            append_table(decoder_input, rnn_state_dec[t-1])
 	    local dlst = decoder_clones[t]:backward(decoder_input, drnn_state_dec)
 	    -- accumulate encoder/decoder grads
 	    if opt.attn == 1 then
@@ -542,12 +538,11 @@ function train(train_data, valid_data)
 	 end
 	 
 	 for t = source_l, 1, -1 do
-            local encoder_input
+            local encoder_input = {source[t]}
             if data.num_source_features > 0 then
-               encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc[t-1])}
-            else
-               encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
+               append_table(encoder_input, source_features[t])
             end
+            append_table(encoder_input, rnn_state_enc[t-1])
 	    if opt.attn == 1 then
 	       drnn_state_enc[#drnn_state_enc]:add(encoder_grads[{{},t}])
 	    else
@@ -570,12 +565,11 @@ function train(train_data, valid_data)
 	       end
 	    end
 	    for t = 1, source_l do
-               local encoder_input
+               local encoder_input = {source[t]}
                if data.num_source_features > 0 then
-                  encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc_bwd[t+1])}
-               else
-                  encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
+                  append_table(encoder_input, source_features[t])
                end
+               append_table(encoder_input, rnn_state_enc_bwd[t+1])
 	       if opt.attn == 1 then
 		  drnn_state_enc[#drnn_state_enc]:add(encoder_bwd_grads[{{},t}])
 	       else
@@ -735,12 +729,11 @@ function eval(data)
       local context = context_proto[{{1, batch_l}, {1, source_l}}]
       -- forward prop encoder
       for t = 1, source_l do
-         local encoder_input
+         local encoder_input = {source[t]}
          if data.num_source_features > 0 then
-            encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc)}
-         else
-            encoder_input = {source[t], table.unpack(rnn_state_enc)}
+            append_table(encoder_input, source_features[t])
          end
+         append_table(encoder_input, rnn_state_enc)
 	 local out = encoder_clones[1]:forward(encoder_input)
 	 rnn_state_enc = out
 	 context[{{},t}]:copy(out[#out])
@@ -764,12 +757,11 @@ function eval(data)
       if opt.brnn == 1 then
 	 local rnn_state_enc = reset_state(init_fwd_enc, batch_l)
 	 for t = source_l, 1, -1 do
-            local encoder_input
+            local encoder_input = {source[t]}
             if data.num_source_features > 0 then
-               encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc)}
-            else
-               encoder_input = {source[t], table.unpack(rnn_state_enc)}
+               append_table(encoder_input, source_features[t])
             end
+            append_table(encoder_input, rnn_state_enc)
 	    local out = encoder_bwd_clones[1]:forward(encoder_input)
 	    rnn_state_enc = out
 	    context[{{},t}]:add(out[#out])
@@ -784,20 +776,16 @@ function eval(data)
       
       local loss = 0
       for t = 1, target_l do
-	 local decoder_input
-	 if opt.attn == 1 then
-            if data.num_target_features > 0 then
-               decoder_input = {target[t], table.unpack(target_features[t]), context, table.unpack(rnn_state_dec)}
-            else
-               decoder_input = {target[t], context, table.unpack(rnn_state_dec)}
-            end
-	 else
-            if data.num_target_features > 0 then
-               decoder_input = {target[t], table.unpack(target_features[t]), context[{{},source_l}], table.unpack(rnn_state_dec)}
-            else
-               decoder_input = {target[t], context[{{},source_l}], table.unpack(rnn_state_dec)}
-            end
-	 end	 
+         local decoder_input = {target[t]}
+         if data.num_target_features > 0 then
+            append_table(decoder_input, target_features[t])
+         end
+         if opt.attn == 1 then
+            append_table(decoder_input, {context})
+         else
+            append_table(decoder_input, {context[{{}, source_l}]})
+         end
+         append_table(decoder_input, rnn_state_dec)
 	 local out = decoder_clones[1]:forward(decoder_input)
          rnn_state_dec = {}
 	 if opt.input_feed == 1 then
