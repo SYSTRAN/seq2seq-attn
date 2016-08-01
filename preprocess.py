@@ -10,6 +10,7 @@ import argparse
 import numpy as np
 import h5py
 import itertools
+import math
 from collections import defaultdict
 
 class Indexer:
@@ -82,6 +83,7 @@ def save_features(name, indexers, outputfile):
 
         
 def get_data(args):
+    int_max_size = 31
     src_feature_indexers = []
     src_indexer = Indexer(["<blank>","<unk>","<s>","</s>"])
     target_indexer = Indexer(["<blank>","<unk>","<s>","</s>"])    
@@ -174,8 +176,20 @@ def get_data(args):
         def init_features_tensor(indexers):
             return [ np.zeros((num_sents,
                                newseqlength,
-                               len(indexers[i].d)), dtype=float)
+                               int(math.ceil(len(indexers[i].d)/float(int_max_size)))), dtype=int)
                      for i in range(len(indexers)) ]
+
+        def values_to_identifier(values, vocab_size):
+            binary = [ 1 if k+1 in values else 0 for k in range(vocab_size) ]
+            splitted = [ binary[i:i+int_max_size] if i+int_max_size < vocab_size else binary[i:]
+                         for i in range(0, vocab_size, int_max_size) ]
+            values = []
+            for k in range(len(splitted)):
+                value = 0
+                for i in range(len(splitted[k])):
+                    value += splitted[k][i] * (2**i)
+                values.append(value)
+            return values
 
         def load_features(orig_features, indexers, seqlength):
             if len(orig_features) == 0:
@@ -189,8 +203,10 @@ def get_data(args):
                 features[i] = pad(features[i], seqlength, [indexers[i].PAD])
                 for j in range(len(features[i])):
                     features[i][j] = indexers[i].convert_sequence(features[i][j])
-                    features[i][j] = [ 1.0/len(features[i][j]) if k+1 in features[i][j] else 0 for k in range(len(indexers[i].d)) ]
-                features[i] = np.array(features[i], dtype=float)
+                    identifier = values_to_identifier(features[i][j], len(indexers[i].d))
+                    features[i][j] = identifier
+                features[i] = np.array(features[i], dtype=int)
+
             return features
 
         newseqlength = seqlength + 2 #add 2 for EOS and BOS
@@ -278,10 +294,10 @@ def get_data(args):
             target_features = load_features(targ_orig_features, target_feature_indexers, newseqlength+1)
 
             for i in range(len(target_feature_indexers)):
-                targets_features[i][sent_id] = np.array(target_features[i][:-1], dtype=float)
-                targets_features_output[i][sent_id] = np.array(target_features[i][1:], dtype=float)
+                targets_features[i][sent_id] = np.array(target_features[i][:-1], dtype=int)
+                targets_features_output[i][sent_id] = np.array(target_features[i][1:], dtype=int)
             for i in range(len(src_feature_indexers)):
-                sources_features[i][sent_id] = np.array(source_features[i], dtype=float)
+                sources_features[i][sent_id] = np.array(source_features[i], dtype=int)
 
             sent_id += 1
             if sent_id % 100000 == 0:
@@ -362,6 +378,7 @@ def get_data(args):
         f["target_size"] = np.array([len(target_indexer.d)])
         f["num_source_features"] = np.array([len(src_feature_indexers)])
         f["num_target_features"] = np.array([len(target_feature_indexers)])
+        f["identifier_max_size"] = np.array([int_max_size])
         for i in range(len(src_feature_indexers)):
             f["source_feature_" + str(i+1)] = sources_features[i]
             f["source_feature_" + str(i+1) + "_size"] = np.array([len(src_feature_indexers[i].d)])

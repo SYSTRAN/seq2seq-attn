@@ -29,6 +29,53 @@ function features_on_gpu(features)
    return clone
 end
 
+function find_powers_of_2(value)
+  local powers = {}
+  local i = 1
+  while i <= value do
+    if bit.band(i, value) ~= 0 then
+       table.insert(powers, math.log(i)/math.log(2))
+    end
+    i = bit.lshift(i, 1)
+  end
+  return powers
+end
+
+function id_to_embedding(values, size, id_max_size)
+   local powers = {}
+   local total_values = 0
+   for k = 1, values:size(1) do
+      local pows = find_powers_of_2(values[k])
+      total_values = total_values + #pows
+      table.insert(powers, pows)
+   end
+   local emb = torch.Tensor(size):zero()
+   local offset = 0
+   for k = 1, #powers do
+      for i = 1, #powers[k] do
+         emb[powers[k][i]+1+offset] = 1.0 / total_values
+      end
+      offset = offset + id_max_size
+   end
+   return emb
+end
+
+function generate_vecs(features, sizes, id_max_size)
+   local data = {}
+   for i = 1,#features do
+      table.insert(data, {})
+      for j = 1,#features[i] do
+         local batch_size = features[i][j]:size(1)
+         local t = torch.Tensor(batch_size, sizes[j])
+         for k = 1, batch_size do
+            t[k]:copy(id_to_embedding(features[i][j][k], sizes[j], id_max_size))
+         end
+         table.insert(data[i], t)
+      end
+   end
+   return data
+end
+
 local data = torch.class("data")
 
 function data:__init(opt, data_file)
@@ -45,6 +92,7 @@ function data:__init(opt, data_file)
 
    self.num_source_features = f:read('num_source_features'):all()[1]
    self.num_target_features = f:read('num_target_features'):all()[1]
+   self.identifier_max_size = f:read('identifier_max_size'):all()[1]
    self.source_features = {}
    self.target_features = {}
    self.target_features_output = {}
@@ -195,9 +243,15 @@ function data.__index(self, idx)
       local target_l = self.batches[idx][6]
       local source_l = self.batches[idx][7]
       local target_l_all = self.batches[idx][8]
-      local source_features = self.batches[idx][9]
-      local target_features = self.batches[idx][10]
-      local target_features_output = self.batches[idx][11]
+      local source_features = generate_vecs(self.batches[idx][9],
+                                            self.source_features_size,
+                                            self.identifier_max_size)
+      local target_features = generate_vecs(self.batches[idx][10],
+                                            self.target_features_size,
+                                            self.identifier_max_size)
+      local target_features_output = generate_vecs(self.batches[idx][11],
+                                                   self.target_features_size,
+                                                   self.identifier_max_size)
       if opt.gpuid >= 0 then --if multi-gpu, source lives in gpuid1, rest on gpuid2
 	 cutorch.setDevice(opt.gpuid)
 	 source_input = source_input:cuda()
