@@ -626,13 +626,28 @@ function strip(s)
    return s:gsub("^%s+",""):gsub("%s+$","")
 end
 
+function string:split( inSplitPattern, outResults )
+  if not outResults then
+    outResults = { }
+  end
+  local theStart = 1
+  local theSplitStart, theSplitEnd = string.find( self, inSplitPattern, theStart )
+  while theSplitStart do
+    table.insert( outResults, string.sub( self, theStart, theSplitStart-1 ) )
+    theStart = theSplitEnd + 1
+    theSplitStart, theSplitEnd = string.find( self, inSplitPattern, theStart )
+  end
+  table.insert( outResults, string.sub( self, theStart ) )
+  return outResults
+end
+
 function load_sentence(line)
    local sent = ''
    local features = {}
 
    for entry in line:gmatch'([^%s]+)' do
-      local field = string.split(entry, '|')
-      local word = clean_sent(string.sub(field[1], 1, -2))
+      local field = entry:split('%-|%-')
+      local word = clean_sent(field[1])
 
       if string.len(word) > 0 then
          if string.len(sent) == 0 then
@@ -646,13 +661,7 @@ function load_sentence(line)
          end
 
          for i= 2, #field do
-            local feat
-            if i == #field then
-               feat = string.sub(field[i], 2, -1)
-            else
-               feat = string.sub(field[i], 2, -2)
-            end
-            local values = string.split(feat, ',')
+            local values = field[i]:split(',')
             table.insert(features[#features], values)
          end
       end
