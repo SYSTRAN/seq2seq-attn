@@ -341,11 +341,15 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
              for j = 1, model_opt.num_target_features do
                 local hyp = {}
                 local lk, idx = torch.sort(next_ys_features[i][j][k], true)
-                for l = 1, lk:size(1) do
-                   if lk[1] - lk[l] < 0.05 then
-                      table.insert(hyp, idx[l])
-                   else
-                      break
+                if lk[1] < 0 then -- logsoftmax => single class classification
+                   table.insert(hyp, idx[1])
+                else
+                   for l = 1, lk:size(1) do
+                      if lk[1] - lk[l] < 0.05 then
+                         table.insert(hyp, idx[l])
+                      else
+                         break
+                      end
                    end
                 end
                 table.insert(pred_feats[k], hyp)

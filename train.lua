@@ -92,6 +92,9 @@ cmd:option('-lr_decay', 0.5, [[Decay learning rate by this much if (i) perplexit
 cmd:option('-start_decay_at', 9, [[Start decay after this epoch]])
 cmd:option('-curriculum', 0, [[For this many epochs, order the minibatches based on source
                 sequence length. Sometimes setting this to 1 will increase convergence speed.]])
+cmd:option('-feature_embeddings', 0, [[If = 1, use a LookupTable for single value features]])
+cmd:option('-feature_embeddings_dim_factor', 0.5, [[If the feature takes N values, then the
+                                                   embbeding dimension will be set to factor*N]])
 cmd:option('-pre_word_vecs_enc', '', [[If a valid path is specified, then this will load 
                                       pretrained word embeddings (hdf5 file) on the encoder side. 
                                       See README for specific formatting instructions.]])
