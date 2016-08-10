@@ -131,7 +131,7 @@ function data:__init(opt, data_file)
       table.insert(self.source_features_use_lookup, use_lookup)
       table.insert(self.source_features_size, feature_size)
       if use_lookup == true then
-         feature_size = math.floor(feature_size * opt.feature_embeddings_dim_factor)
+         feature_size = math.floor(feature_size ^ opt.feature_embeddings_dim_exponent)
       end
       table.insert(self.source_features_vec_size, feature_size)
       self.total_source_features_size = self.total_source_features_size + feature_size
@@ -146,7 +146,7 @@ function data:__init(opt, data_file)
       table.insert(self.target_features_use_lookup, use_lookup)
       table.insert(self.target_features_size, feature_size)
       if use_lookup == true then
-         feature_size = math.floor(feature_size * opt.feature_embeddings_dim_factor)
+         feature_size = math.ceil(feature_size ^ opt.feature_embeddings_dim_exponent)
       end
       table.insert(self.target_features_vec_size, feature_size)
       self.total_target_features_size = self.total_target_features_size + feature_size
