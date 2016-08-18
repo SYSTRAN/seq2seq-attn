@@ -81,6 +81,11 @@ def save_features(name, indexers, outputfile):
         indexers[i].write(outputfile + "." + name + "_feature_" + str(i+1) + ".dict", )
         print(" * {} feature {} of size: {} (maximal number of values per word: {})".format(name, i+1, len(indexers[i].d), indexers[i].max_num_values))
 
+def load_features(name, indexers, outputfile):
+    for i in range(len(indexers)):
+        indexers[i].load_vocab(outputfile + "." + name + "_feature_" + str(i+1) + ".dict", )
+        print(" * {} feature {} of size: {} (maximal number of values per word: {})".format(name, i+1, len(indexers[i].d), indexers[i].max_num_values))
+
 def get_data(args):
     int_max_size = 31
     src_feature_indexers = []
@@ -431,6 +436,10 @@ def get_data(args):
         char_indexer.write(args.outputfile + ".char.dict", args.chars)
         print("Character vocab size: {}".format(len(char_indexer.vocab)))
 
+    if args.reusefeaturefile != '':
+        load_features('source', src_feature_indexers, args.reusefeaturefile)
+        load_features('target', target_feature_indexers, args.reusefeaturefile)
+
     save_features('source', src_feature_indexers, args.outputfile)
     save_features('target', target_feature_indexers, args.outputfile)
 
@@ -495,6 +504,8 @@ def main(arguments):
                                        "Can be an absolute count limit (if > 1) "
                                        "or a proportional limit (0 < unkfilter < 1).",
                                           type = float, default = 0)
+    parser.add_argument('--reusefeaturefile', help="use existing feature vocabs",
+                                          type = str, default ='')
     parser.add_argument('--shuffle', help="If = 1, shuffle sentences before sorting (based on  "
                                            "source length).",
                                           type = int, default = 0)
