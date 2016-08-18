@@ -104,6 +104,8 @@ or zero-padded (if shorter) to `maxwordlength`.
 depending on your data size, so you may want to break up the training data into different shards.  
 * `srcvocabfile, targetvocabfile`: If working with a preset vocab, then including these paths
 will ignore the `srcvocabsize,targetvocabsize`.  
+* `reusefeaturefile`: If working with a preset vocab for features, then including the prefix of
+the prefix dictionary path will ignore the vocab learn from corpus
 * `unkfilter`: Ignore sentences with too many UNK tokens. Can be an absolute count limit (if > 1)
 or a proportional limit (0 < unkfilter < 1).  
 * `shuffle`: Shuffle sentences.  
