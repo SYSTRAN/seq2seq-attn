@@ -109,6 +109,9 @@ the prefix dictionary path will ignore the vocab learn from corpus
 * `unkfilter`: Ignore sentences with too many UNK tokens. Can be an absolute count limit (if > 1)
 or a proportional limit (0 < unkfilter < 1).  
 * `shuffle`: Shuffle sentences.  
+* `alignfile`, `alignvalfile`: when passing file with symmetrized alignment, sentences where source or
+target words matching 'alignpattern' and not aligned - are skipped.
+* `alignpattern`: regular expression to words checked in the alignment - by default '&lt;unk&gt;'
 
 #### Training options (`train.lua`)
 **Data options**
