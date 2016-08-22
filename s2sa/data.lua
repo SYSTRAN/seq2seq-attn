@@ -19,11 +19,13 @@ function features_per_timestep(features)
 end
 
 function features_on_gpu(features)
+  local clone = {}
   for i = 1,#features do
     for j = 1,#features[i] do
-      features[i][j] = features[i][j]:cuda()
+      table.insert(clone[i], features[i][j]:cuda())
     end
   end
+  return clone
 end
 
 local data = torch.class("data")
@@ -199,15 +201,15 @@ function data.__index(self, idx)
     if opt.gpuid >= 0 then --if multi-gpu, source lives in gpuid1, rest on gpuid2
       cutorch.setDevice(opt.gpuid)
       source_input = source_input:cuda()
-      features_on_gpu(source_features)
+      source_features = features_on_gpu(source_features)
       if opt.gpuid2 >= 0 then
         cutorch.setDevice(opt.gpuid2)
       end
       target_input = target_input:cuda()
       target_output = target_output:cuda()
       target_l_all = target_l_all:cuda()
-      features_on_gpu(target_features)
-      features_on_gpu(target_features_output)
+      target_features = features_on_gpu(target_features)
+      target_features_output = features_on_gpu(target_features_output)
     end
     return {target_input, target_output, nonzeros, source_input,
       batch_l, target_l, source_l, target_l_all,
