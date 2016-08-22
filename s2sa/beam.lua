@@ -19,6 +19,7 @@ cmd:option('-targ_file', '', [[True target sequence (optional)]])
 cmd:option('-output_file', 'pred.txt', [[Path to output the predictions (each line will be the decoded sequence]])
 cmd:option('-src_dict', 'data/demo.src.dict', [[Path to source vocabulary (*.src.dict file)]])
 cmd:option('-targ_dict', 'data/demo.targ.dict', [[Path to target vocabulary (*.targ.dict file)]])
+cmd:option('-feature_dict_prefix', 'data/demo', [[Prefix of the path to features vocabulary (*.feature_N.dict file)]])
 cmd:option('-char_dict', 'data/demo.char.dict', [[If using chars, path to character vocabulary (*.char.dict file)]])
 
 -- beam search options
@@ -104,7 +105,7 @@ function flat_to_rc(v, flat_index)
   return row, (flat_index - 1) % v:size(2) + 1
 end
 
-function generate_beam(model, initial, K, max_sent_l, source, gold)
+function generate_beam(model, initial, K, max_sent_l, source, source_features, gold, gold_features)
   --reset decoder initial states
   if opt.gpuid >= 0 and opt.gpuid2 >= 0 then
     cutorch.setDevice(opt.gpuid)
@@ -114,6 +115,16 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
   local prev_ks = torch.LongTensor(n, K):fill(1)
   -- Current States.
   local next_ys = torch.LongTensor(n, K):fill(1)
+  local next_ys_features = {}
+  if model_opt.num_target_features > 0 then
+    for i = 1, n do
+      table.insert(next_ys_features, {})
+      for j = 1, model_opt.num_target_features do
+        table.insert(next_ys_features[i], torch.DoubleTensor(K, #idx2feature_targ[j]):zero())
+      end
+    end
+  end
+
   -- Current Scores.
   local scores = torch.FloatTensor(n, K)
   scores:zero()
@@ -127,6 +138,17 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
     table.insert(states[1], initial)
     table.insert(attn_argmax[1], initial)
     next_ys[1][k] = State.next(initial)
+    for j = 1, model_opt.num_target_features do
+      next_ys_features[1][j][k][START] = 1
+    end
+  end
+
+  local max_hyp_feats = {}
+  if model_opt.num_target_features > 0 then
+    table.insert(max_hyp_feats, {})
+    for j = 1, model_opt.num_target_features do
+      table.insert(max_hyp_feats[1], {START})
+    end
   end
 
   local source_input
@@ -143,7 +165,12 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
   local context = context_proto[{{}, {1,source_l}}]:clone() -- 1 x source_l x rnn_size
 
   for t = 1, source_l do
-    local encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+    local encoder_input
+    if model_opt.num_source_features > 0 then
+      encoder_input = {source_input[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc)}
+    else
+      encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+    end
     local out = model[1]:forward(encoder_input)
     rnn_state_enc = out
     context[{{},t}]:copy(out[#out])
@@ -167,7 +194,12 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
       rnn_state_enc[i]:zero()
     end
     for t = source_l, 1, -1 do
-      local encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+      local encoder_input
+      if model_opt.num_source_features > 0 then
+        encoder_input = {source_input[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc)}
+      else
+        encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+      end
       local out = model[4]:forward(encoder_input)
       rnn_state_enc = out
       context[{{},t}]:add(out[#out])
@@ -208,6 +240,7 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
     states[i] = {}
     attn_argmax[i] = {}
     local decoder_input1
+    local decoder_input1_features
     if model_opt.use_chars_dec == 1 then
       decoder_input1 = word2charidx_targ:index(1, next_ys:narrow(1,i-1,1):squeeze())
     else
@@ -215,15 +248,31 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
       if opt.beam == 1 then
         decoder_input1 = torch.LongTensor({decoder_input1})
       end
+      decoder_input1_features = {}
+      for j = 1, model_opt.num_target_features do
+        table.insert(decoder_input1_features, next_ys_features[i-1][j])
+      end
     end
     local decoder_input
     if model_opt.attn == 1 then
-      decoder_input = {decoder_input1, context, table.unpack(rnn_state_dec)}
+      if model_opt.num_target_features > 0 then
+        decoder_input = {decoder_input1, table.unpack(decoder_input1_features), context, table.unpack(rnn_state_dec)}
+      else
+        decoder_input = {decoder_input1, context, table.unpack(rnn_state_dec)}
+      end
     else
-      decoder_input = {decoder_input1, context[{{}, source_l}], table.unpack(rnn_state_dec)}
+      if model_opt.num_target_features > 0 then
+        decoder_input = {decoder_input1, table.unpack(decoder_input1_features), context[{{}, source_l}], table.unpack(rnn_state_dec)}
+      else
+        decoder_input = {decoder_input1, context[{{}, source_l}], table.unpack(rnn_state_dec)}
+      end
     end
     local out_decoder = model[2]:forward(decoder_input)
     local out = model[3]:forward(out_decoder[#out_decoder]) -- K x vocab_size
+
+    for j = 1, model_opt.num_target_features do
+      next_ys_features[i][j]:copy(out[1+j])
+    end
 
     rnn_state_dec = {} -- to be modified later
     if model_opt.input_feed == 1 then
@@ -232,7 +281,7 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
     for j = 1, #out_decoder - 1 do
       table.insert(rnn_state_dec, out_decoder[j])
     end
-    out_float:resize(out:size()):copy(out)
+    out_float:resize(out[1]:size()):copy(out[1])
     for k = 1, K do
       State.disallow(out_float:select(1, k))
       out_float[k]:add(scores[i-1][k])
@@ -279,20 +328,48 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
     for j = 1, #rnn_state_dec do
       rnn_state_dec[j]:copy(rnn_state_dec[j]:index(1, prev_ks[i]))
     end
+
+    if model_opt.num_target_features > 0 then
+      pred_feats = {}
+      for k = 1, K do
+        table.insert(pred_feats, {})
+        for j = 1, model_opt.num_target_features do
+          local hyp = {}
+          local lk, idx = torch.sort(next_ys_features[i][j][k], true)
+          for l = 1, lk:size(1) do
+            if lk[1] - lk[l] < 0.05 then
+              table.insert(hyp, idx[l])
+            else
+              break
+            end
+          end
+          table.insert(pred_feats[k], hyp)
+        end
+      end
+    end
+
     end_hyp = states[i][1]
     end_score = scores[i][1]
     if model_opt.attn == 1 then
       end_attn_argmax = attn_argmax[i][1]
     end
     if end_hyp[#end_hyp] == END then
+      if model_opt.num_target_features > 0 then
+        table.insert(max_hyp_feats, {})
+        for j = 1, model_opt.num_target_features do
+          table.insert(max_hyp_feats[#max_hyp_feats], {END})
+        end
+      end
       done = true
       found_eos = true
     else
+      local best_k = 1
       for k = 1, K do
         local possible_hyp = states[i][k]
         if possible_hyp[#possible_hyp] == END then
           found_eos = true
           if scores[i][k] > max_score then
+            best_k = k
             max_hyp = possible_hyp
             max_score = scores[i][k]
             if model_opt.attn == 1 then
@@ -300,6 +377,10 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
             end
           end
         end
+      end
+
+      if model_opt.num_target_features > 0 then
+        table.insert(max_hyp_feats, pred_feats[best_k])
       end
     end
   end
@@ -322,9 +403,17 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
       end
       local decoder_input
       if model_opt.attn == 1 then
-        decoder_input = {decoder_input1, context[{{1}}], table.unpack(rnn_state_dec)}
+        if model_opt.num_target_features > 0 then
+          decoder_input = {decoder_input1, table.unpack(gold_features[t-1]), context[{{1}}], table.unpack(rnn_state_dec)}
+        else
+          decoder_input = {decoder_input1, context[{{1}}], table.unpack(rnn_state_dec)}
+        end
       else
-        decoder_input = {decoder_input1, context[{{1}, source_l}], table.unpack(rnn_state_dec)}
+        if model_opt.num_target_features > 0 then
+          decoder_input = {decoder_input1, table.unpack(gold_features[t-1]), context[{{1}, source_l}], table.unpack(rnn_state_dec)}
+        else
+          decoder_input = {decoder_input1, context[{{1}, source_l}], table.unpack(rnn_state_dec)}
+        end
       end
       local out_decoder = model[2]:forward(decoder_input)
       local out = model[3]:forward(out_decoder[#out_decoder]) -- K x vocab_size
@@ -335,7 +424,7 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
       for j = 1, #out_decoder - 1 do
         table.insert(rnn_state_dec, out_decoder[j])
       end
-      gold_score = gold_score + out[1][gold[t]]
+      gold_score = gold_score + out[1][1][gold[t]]
     end
   end
   if opt.simple == 1 or end_score > max_score or not found_eos then
@@ -344,7 +433,7 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
     max_attn_argmax = end_attn_argmax
   end
 
-  return max_hyp, max_score, max_attn_argmax, gold_score, states[i], scores[i], attn_argmax[i]
+  return max_hyp, max_hyp_feats, max_score, max_attn_argmax, gold_score, states[i], scores[i], attn_argmax[i]
 end
 
 function idx2key(file)
@@ -404,6 +493,48 @@ function sent2wordidx(sent, word2idx, start_symbol)
   return torch.LongTensor(t), u
 end
 
+function get_feature_embedding(values, feature2idx, vocab_size)
+  local emb = {}
+  for i = 1, vocab_size do
+    table.insert(emb, 0)
+  end
+  for i = 1, #values do
+    local idx = feature2idx[values[i]]
+    emb[idx] = 1
+  end
+  return torch.DoubleTensor(emb):view(1,#emb)
+end
+
+function features2featureidx(features, feature2idx, idx2feature, start_symbol)
+  local out = {}
+
+  if start_symbol == 1 then
+    table.insert(out, {})
+    for j = 1, #feature2idx do
+      local emb = get_feature_embedding({START_WORD}, feature2idx[j], #idx2feature[j])
+      table.insert(out[#out], emb)
+    end
+  end
+
+  for i = 1, #features do
+    table.insert(out, {})
+    for j = 1, #feature2idx do
+      local emb = get_feature_embedding(features[i][j], feature2idx[j], #idx2feature[j])
+      table.insert(out[#out], emb)
+    end
+  end
+
+  if start_symbol == 1 then
+    table.insert(out, {})
+    for j = 1, #feature2idx do
+      local emb = get_feature_embedding({END_WORD}, feature2idx[j], #idx2feature[j])
+      table.insert(out[#out], emb)
+    end
+  end
+
+  return out
+end
+
 function sent2charidx(sent, char2idx, max_word_l, start_symbol)
   local words = {}
   if start_symbol == 1 then
@@ -441,7 +572,7 @@ function word2charidx(word, char2idx, max_word_l, t)
   return t
 end
 
-function wordidx2sent(sent, idx2word, source_str, attn, skip_end)
+function wordidx2sent(sent, features, idx2word, idx2feature, source_str, attn, skip_end)
   local t = {}
   local start_i, end_i
   skip_end = skip_start_end or true
@@ -451,6 +582,7 @@ function wordidx2sent(sent, idx2word, source_str, attn, skip_end)
     end_i = #sent
   end
   for i = 2, end_i do -- skip START and END
+    local fields = {}
     if sent[i] == UNK then
       if opt.replace_unk == 1 then
         local s = source_str[attn[i]]
@@ -458,13 +590,22 @@ function wordidx2sent(sent, idx2word, source_str, attn, skip_end)
           print(s .. ':' ..phrase_table[s])
         end
         local r = phrase_table[s] or s
-        table.insert(t, r)
+        table.insert(fields, r)
       else
-        table.insert(t, idx2word[sent[i]])
+        table.insert(fields, idx2word[sent[i]])
       end
     else
-      table.insert(t, idx2word[sent[i]])
+      table.insert(fields, idx2word[sent[i]])
     end
+    for j = 1, model_opt.num_target_features do
+      local values = {}
+      for k = 1, #features[i][j] do
+        table.insert(values, idx2feature[j][features[i][j][k]])
+      end
+      local values_str = table.concat(values, ',')
+      table.insert(fields, values_str)
+    end
+    table.insert(t, table.concat(fields, '-|-'))
   end
   return table.concat(t, ' ')
 end
@@ -480,6 +621,40 @@ end
 
 function strip(s)
   return s:gsub("^%s+",""):gsub("%s+$","")
+end
+
+function load_sentence(line)
+  local sent = ''
+  local features = {}
+
+  for entry in line:gmatch'([^%s]+)' do
+    local field = string.split(entry, '|')
+    local word = clean_sent(string.sub(field[1], 1, -2))
+
+    if string.len(word) > 0 then
+      if string.len(sent) == 0 then
+        sent = word
+      else
+        sent = sent .. ' ' .. word
+      end
+
+      if #field > 1 then
+        table.insert(features, {})
+      end
+
+      for i= 2, #field do
+        local feat
+        if i == #field then
+          feat = string.sub(field[i], 2, -1)
+        else
+          feat = string.sub(field[i], 2, -2)
+        end
+        local values = string.split(feat, ',')
+        table.insert(features[#features], values)
+      end
+    end
+  end
+  return sent, features
 end
 
 function buildAbsolutePaths(resourcesDir)
@@ -556,11 +731,27 @@ function init(arg, resourcesDir)
   model_opt.brnn = model_opt.brnn or 0
   model_opt.input_feed = model_opt.input_feed or 1
   model_opt.attn = model_opt.attn or 1
+  model_opt.num_source_features = model_opt.num_source_features or 0
+  model_opt.num_target_features = model_opt.num_target_features or 0
 
   idx2word_src = idx2key(opt.src_dict)
   word2idx_src = flip_table(idx2word_src)
   idx2word_targ = idx2key(opt.targ_dict)
   word2idx_targ = flip_table(idx2word_targ)
+
+  idx2feature_src = {}
+  feature2idx_src = {}
+  idx2feature_targ = {}
+  feature2idx_targ = {}
+
+  for i = 1, model_opt.num_source_features do
+    table.insert(idx2feature_src, idx2key(opt.feature_dict_prefix .. '.source_feature_' .. i .. '.dict'))
+    table.insert(feature2idx_src, flip_table(idx2feature_src[i]))
+  end
+  for i = 1, model_opt.num_target_features do
+    table.insert(idx2feature_targ, idx2key(opt.feature_dict_prefix .. '.target_feature_' .. i .. '.dict'))
+    table.insert(feature2idx_targ, flip_table(idx2feature_targ[i]))
+  end
 
   -- load character dictionaries if needed
   if model_opt.use_chars_enc == 1 or model_opt.use_chars_dec == 1 then
@@ -653,23 +844,26 @@ end
 
 function search(line)
   sent_id = sent_id + 1
-  line = clean_sent(line)
   print('SENT ' .. sent_id .. ': ' ..line)
+  line, source_features_str = load_sentence(line)
   local source, source_str
+  local source_features = features2featureidx(source_features_str, feature2idx_src, idx2feature_src, model_opt.start_symbol)
   if model_opt.use_chars_enc == 0 then
     source, source_str = sent2wordidx(line, word2idx_src, model_opt.start_symbol)
   else
     source, source_str = sent2charidx(line, char2idx, model_opt.max_word_l, model_opt.start_symbol)
   end
   if opt.score_gold == 1 then
-    target, target_str = sent2wordidx(gold[sent_id], word2idx_targ, 1)
+    gold_line, target_features_str = load_sentence(gold[sent_id])
+    target, target_str = sent2wordidx(gold_line, word2idx_targ, 1)
+    target_features = features2featureidx(target_features_str, feature2idx_targ, idx2feature_targ, 1)
   end
   state = State.initial(START)
-  pred, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(model,
-    state, opt.beam, MAX_SENT_L, source, target)
+  pred, pred_features, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(model,
+    state, opt.beam, MAX_SENT_L, source, source_features, target, target_features)
   pred_score_total = pred_score_total + pred_score
   pred_words_total = pred_words_total + #pred - 1
-  pred_sent = wordidx2sent(pred, idx2word_targ, source_str, attn, true)
+  pred_sent = wordidx2sent(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn, true)
 
   print('PRED ' .. sent_id .. ': ' .. pred_sent)
   if gold ~= nil then
@@ -683,7 +877,7 @@ function search(line)
 
   nbests = {}
 
-  if opt.n_best > 1 then
+  if opt.n_best > 1 and model_opt.num_target_features == 0 then
     for n = 1, opt.n_best do
       pred_sent_n = wordidx2sent(all_sents[n], idx2word_targ, source_str, all_attn[n], false)
       local out_n = string.format("%d ||| %s ||| %.4f", n, pred_sent_n, all_scores[n])
