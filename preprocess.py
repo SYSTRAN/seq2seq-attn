@@ -104,7 +104,7 @@ def get_data(args):
                     values = fields[i].split(',')
                     sent_features[i-1].append(values)
 
-        return sent, sent_features
+        return sent_words, sent_features
 
     def make_vocab(srcfile, targetfile, seqlength, max_word_l=0, chars=0):
         num_sents = 0
