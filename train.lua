@@ -106,6 +106,7 @@ cmd:option('-fix_word_vecs_dec', 0, [[If = 1, fix word embeddings on the decoder
 cmd:option('-max_batch_l', '', [[If blank, then it will infer the max batch size from validation 
                                data. You should only use this if your validation set uses a different
                                batch size in the preprocessing step]])
+cmd:option('-position', 0, [[If = 1, input position vector]])
 cmd:text("")
 cmd:text("**Other options**")
 cmd:text("")
@@ -217,6 +218,9 @@ function train(train_data, valid_data)
    encoder_grad_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
    encoder_bwd_grad_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
    context_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
+   -- prototypes for position vector
+   position_s_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, 2)
+   position_t_proto = torch.zeros(opt.max_batch_l, 1)
    -- need more copies of the above if using two gpus
    if opt.gpuid2 >= 0 then
       encoder_grad_proto2 = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
@@ -256,6 +260,8 @@ function train(train_data, valid_data)
 	 encoder_grad_proto = encoder_grad_proto:cuda()
 	 encoder_bwd_grad_proto = encoder_bwd_grad_proto:cuda()
 	 context_proto2 = context_proto2:cuda()
+   position_s_proto = position_s_proto:cuda()
+   position_t_proto = position_t_proto:cuda()
 	 cutorch.setDevice(opt.gpuid)	 
       else
 	 context_proto = context_proto:cuda()
@@ -263,6 +269,8 @@ function train(train_data, valid_data)
 	 if opt.brnn == 1 then
 	    encoder_bwd_grad_proto = encoder_bwd_grad_proto:cuda()
 	 end	 
+   position_s_proto = position_s_proto:cuda()
+   position_t_proto = position_t_proto:cuda()
       end
    end
 
@@ -385,7 +393,16 @@ function train(train_data, valid_data)
 	 end	 	 
 	 local rnn_state_enc = reset_state(init_fwd_enc, batch_l, 0)
 	 local context = context_proto[{{1, batch_l}, {1, source_l}}]
+   local position_s = position_s_proto[{{1, batch_l}, {1, source_l}, {1, 2}}]
+   local position_t = position_t_proto[{{1, batch_l}, {1, 1}}]
 	 -- forward prop encoder
+
+   for i = 1, batch_l do
+    for j = 1, source_l do
+      position_s[i][j][1]=math.log(1+j)
+      position_s[i][j][2]=math.log(1+source_l)
+    end
+  end
 
 	 for t = 1, source_l do
 	    encoder_clones[t]:training()
@@ -450,6 +467,12 @@ function train(train_data, valid_data)
                append_table(decoder_input, {context[{{}, source_l}]})
 	    end
             append_table(decoder_input, rnn_state_dec[t-1])
+      if opt.position == 1 then
+        for i = 1, batch_l do
+          position_t[i][1]=math.log(1+t)
+        end
+        append_table(decoder_input,{position_s,position_t})
+      end
 	    local out = decoder_clones[t]:forward(decoder_input)
 	    local next_state = {}
 	    table.insert(preds, out[#out])
@@ -513,7 +536,7 @@ function train(train_data, valid_data)
 	       drnn_state_dec[#drnn_state_dec]:add(dlst[3+data.num_target_features])
 	    end	    
             local offset = dec_offset+data.num_target_features
-	    for j = offset, #dlst do
+	    for j = offset, #dlst-opt.position*2 do
 	       drnn_state_dec[j-offset+1]:copy(dlst[j])
 	    end	    
 	 end
@@ -767,6 +790,10 @@ function eval(data)
                append_table(encoder_input, source_features[t])
             end
             append_table(encoder_input, rnn_state_enc)
+            for i = 1, batch_l do
+              position_t[i][1]=math.log(1+t)
+            end
+            append_table(decoder_input,{position_s,position_t})
 	    local out = encoder_bwd_clones[1]:forward(encoder_input)
 	    rnn_state_enc = out
 	    context[{{},t}]:add(out[#out])
