@@ -50,7 +50,6 @@ function make_lstm(data, opt, model, use_chars)
    end
 
    if model == 'dec' and opt.position == 1 then
-     table.insert(inputs, nn.Identity()()) -- position_s vector
      table.insert(inputs, nn.Identity()()) -- position_t vector
    end
 
@@ -158,7 +157,6 @@ function make_lstm(data, opt, model, use_chars)
 	decoder_attn.name = 'decoder_attn'
         param_decoder={top_h, inputs[2+num_features]}
         if opt.position == 1 then
-          table.insert(param_decoder,inputs[#inputs-1])
           table.insert(param_decoder,inputs[#inputs])
         end
         decoder_out = decoder_attn(param_decoder)
@@ -176,8 +174,7 @@ end
 
 function make_decoder_attn(data, opt, simple)
    -- 2D tensor target_t (batch_l x rnn_size) and
-   -- 3D tensor for context (batch_l x source_l x rnn_size)
-   -- 3D vector position (batch_l x source_l x 2)  (1+log i, 1+log I)
+   -- 3D tensor for context (batch_l x source_l x rnn_size +2 (if position))
    -- 2D vector target position (batch_l x 1) (1+log j)
 
    local inputs = {}
@@ -187,11 +184,9 @@ function make_decoder_attn(data, opt, simple)
    local context = inputs[2]
    if opt.position == 1 then
      table.insert(inputs, nn.Identity()())
-     table.insert(inputs, nn.Identity()())
-     context=nn.JoinTable(3)({context, inputs[3]})
-     target_t=nn.JoinTable(2)({target_t, inputs[4]})
+     target_t=nn.JoinTable(2)({target_t, inputs[3]})
    end
-   target_t = nn.LinearNoBias(opt.rnn_size+opt.position*1, opt.rnn_size+opt.position*2)(target_t)
+   target_t = nn.LinearNoBias(opt.rnn_size+opt.position*1, opt.rnn_size+opt.position*2)(target_t) -- batch_l x rnn_size
    simple = simple or 0
    -- get attention
 
@@ -203,15 +198,15 @@ function make_decoder_attn(data, opt, simple)
    attn = nn.Replicate(1,2)(attn) -- batch_l x  1 x source_l
    
    -- apply attention to context
-   local context_combined = nn.MM()({attn, inputs[2]}) -- batch_l x 1 x rnn_size
-   context_combined = nn.Sum(2)(context_combined) -- batch_l x rnn_size
+   local context_combined = nn.MM()({attn, inputs[2]}) -- batch_l x 1 x rnn_size +2 (if position)
+   context_combined = nn.Sum(2)(context_combined) -- batch_l x rnn_size +2 (if position)
    local context_output
    if simple == 0 then
-      context_combined = nn.JoinTable(2)({context_combined, inputs[1]}) -- batch_l x rnn_size*2
-      context_output = nn.Tanh()(nn.LinearNoBias(opt.rnn_size*2,
-						 opt.rnn_size)(context_combined))
+      context_combined = nn.JoinTable(2)({context_combined, inputs[1]}) -- batch_l x rnn_size*2 +2 (if position)
+      context_output = nn.Tanh()(nn.LinearNoBias(opt.rnn_size*2+opt.position*2,
+						 opt.rnn_size+opt.position*2)(context_combined))
    else
-      context_output = nn.CAddTable()({context_combined,inputs[1]})
+      context_output = nn.CAddTable()({context_combined,target_t})
    end   
    return nn.gModule(inputs, {context_output})   
 end
