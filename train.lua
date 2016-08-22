@@ -135,6 +135,7 @@ function train(train_data, valid_data)
   params, grad_params = {}, {}
   opt.train_perf = {}
   opt.val_perf = {}
+  opt.num_features = train_data.features_count
 
   for i = 1, #layers do
     if opt.gpuid2 >= 0 then
@@ -271,7 +272,7 @@ function train(train_data, valid_data)
     table.insert(init_bwd_dec, h_init:clone())
   end
 
-  dec_offset = 3 -- offset depends on input feeding
+  dec_offset = 3+train_data.features_count -- offset depends on input feeding
   if opt.input_feed == 1 then
     dec_offset = dec_offset + 1
   end
@@ -349,7 +350,7 @@ function train(train_data, valid_data)
       end
       local target, target_out, nonzeros, source = d[1], d[2], d[3], d[4]
       local batch_l, target_l, source_l = d[5], d[6], d[7]
-
+      local source_features, target_features, target_features_out = d[9], d[10], d[11]
       local encoder_grads = encoder_grad_proto[{{1, batch_l}, {1, source_l}}]
       local encoder_bwd_grads
       if opt.brnn == 1 then
@@ -361,9 +362,15 @@ function train(train_data, valid_data)
       local rnn_state_enc = reset_state(init_fwd_enc, batch_l, 0)
       local context = context_proto[{{1, batch_l}, {1, source_l}}]
       -- forward prop encoder
+
       for t = 1, source_l do
         encoder_clones[t]:training()
-        local encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
+        local encoder_input
+        if data.features_count > 0 then
+          encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc[t-1])}
+        else
+          encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
+        end
         local out = encoder_clones[t]:forward(encoder_input)
         rnn_state_enc[t] = out
         context[{{},t}]:copy(out[#out])
@@ -374,7 +381,12 @@ function train(train_data, valid_data)
         rnn_state_enc_bwd = reset_state(init_fwd_enc, batch_l, source_l+1)
         for t = source_l, 1, -1 do
           encoder_bwd_clones[t]:training()
-          local encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
+          local encoder_input
+          if data.features_count > 0 then
+            encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc_bwd[t+1])}
+          else
+            encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
+          end
           local out = encoder_bwd_clones[t]:forward(encoder_input)
           rnn_state_enc_bwd[t] = out
           context[{{},t}]:add(out[#out])
@@ -408,9 +420,17 @@ function train(train_data, valid_data)
         decoder_clones[t]:training()
         local decoder_input
         if opt.attn == 1 then
-          decoder_input = {target[t], context, table.unpack(rnn_state_dec[t-1])}
+          if data.features_count > 0 then
+            decoder_input = {target[t], table.unpack(target_features[t]), context, table.unpack(rnn_state_dec[t-1])}
+          else
+            decoder_input = {target[t], context, table.unpack(rnn_state_dec[t-1])}
+          end
         else
-          decoder_input = {target[t], context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
+          if data.features_count > 0 then
+            decoder_input = {target[t], table.unpack(target_features[t]), context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
+          else
+            decoder_input = {target[t], context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
+          end
         end
         local out = decoder_clones[t]:forward(decoder_input)
         local next_state = {}
@@ -434,33 +454,46 @@ function train(train_data, valid_data)
       local loss = 0
       for t = target_l, 1, -1 do
         local pred = generator:forward(preds[t])
-        loss = loss + criterion:forward(pred, target_out[t])/batch_l
-        local dl_dpred = criterion:backward(pred, target_out[t])
-        dl_dpred:div(batch_l)
+        local output
+        if data.features_count > 0 then
+          output = {target_out[t], table.unpack(target_features_out[t])}
+        else
+          output = {target_out[t]}
+        end
+        loss = loss + criterion:forward(pred, output)
+        local dl_dpred = criterion:backward(pred, output)
         local dl_dtarget = generator:backward(preds[t], dl_dpred)
         drnn_state_dec[#drnn_state_dec]:add(dl_dtarget)
         local decoder_input
         if opt.attn == 1 then
-          decoder_input = {target[t], context, table.unpack(rnn_state_dec[t-1])}
+          if data.features_count > 0 then
+            decoder_input = {target[t], table.unpack(target_features[t]), context, table.unpack(rnn_state_dec[t-1])}
+          else
+            decoder_input = {target[t], context, table.unpack(rnn_state_dec[t-1])}
+          end
         else
-          decoder_input = {target[t], context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
+          if data.features_count > 0 then
+            decoder_input = {target[t], table.unpack(target_features[t]), context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
+          else
+            decoder_input = {target[t], context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
+          end
         end
         local dlst = decoder_clones[t]:backward(decoder_input, drnn_state_dec)
         -- accumulate encoder/decoder grads
         if opt.attn == 1 then
-          encoder_grads:add(dlst[2])
+          encoder_grads:add(dlst[2+data.features_count])
           if opt.brnn == 1 then
-            encoder_bwd_grads:add(dlst[2])
+            encoder_bwd_grads:add(dlst[2+data.features_count])
           end
         else
-          encoder_grads[{{}, source_l}]:add(dlst[2])
+          encoder_grads[{{}, source_l}]:add(dlst[2+data.features_count])
           if opt.brnn == 1 then
-            encoder_bwd_grads[{{}, 1}]:add(dlst[2])
+            encoder_bwd_grads[{{}, 1}]:add(dlst[2+data.features_count])
           end
         end
         drnn_state_dec[#drnn_state_dec]:zero()
         if opt.input_feed == 1 then
-          drnn_state_dec[#drnn_state_dec]:add(dlst[3])
+          drnn_state_dec[#drnn_state_dec]:add(dlst[3+data.features_count])
         end
         for j = dec_offset, #dlst do
           drnn_state_dec[j-dec_offset+1]:copy(dlst[j])
@@ -492,7 +525,12 @@ function train(train_data, valid_data)
       end
 
       for t = source_l, 1, -1 do
-        local encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
+        local encoder_input
+        if data.features_count > 0 then
+          encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc[t-1])}
+        else
+          encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
+        end
         if opt.attn == 1 then
           drnn_state_enc[#drnn_state_enc]:add(encoder_grads[{{},t}])
         else
@@ -501,7 +539,7 @@ function train(train_data, valid_data)
           end
         end
         local dlst = encoder_clones[t]:backward(encoder_input, drnn_state_enc)
-        for j = 1, #drnn_state_enc do
+        for j = 1+data.features_count, #drnn_state_enc do
           drnn_state_enc[j]:copy(dlst[j+1])
         end
       end
@@ -515,7 +553,12 @@ function train(train_data, valid_data)
           end
         end
         for t = 1, source_l do
-          local encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
+          local encoder_input
+          if data.features_count > 0 then
+            encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc_bwd[t+1])}
+          else
+            encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
+          end
           if opt.attn == 1 then
             drnn_state_enc[#drnn_state_enc]:add(encoder_bwd_grads[{{},t}])
           else
@@ -524,7 +567,7 @@ function train(train_data, valid_data)
             end
           end
           local dlst = encoder_bwd_clones[t]:backward(encoder_input, drnn_state_enc)
-          for j = 1, #drnn_state_enc do
+          for j = 1+data.features_count, #drnn_state_enc do
             drnn_state_enc[j]:copy(dlst[j+1])
           end
         end
@@ -637,7 +680,7 @@ function train(train_data, valid_data)
     local savefile = string.format('%s_epoch%.2f_%.2f.t7', opt.savefile, epoch, score)
     if epoch % opt.save_every == 0 then
       print('saving checkpoint to ' .. savefile)
-      clean_layer(generator)
+      -- clean_layer(generator)
       if opt.brnn == 0 then
         torch.save(savefile, {{encoder, decoder, generator}, opt})
       else
@@ -647,7 +690,7 @@ function train(train_data, valid_data)
   end
   -- save final model
   local savefile = string.format('%s_final.t7', opt.savefile)
-  clean_layer(generator)
+  -- clean_layer(generator)
   print('saving final model to ' .. savefile)
   if opt.brnn == 0 then
     torch.save(savefile, {{encoder:double(), decoder:double(), generator:double()}, opt})
@@ -671,6 +714,7 @@ function eval(data)
     local d = data[i]
     local target, target_out, nonzeros, source = d[1], d[2], d[3], d[4]
     local batch_l, target_l, source_l = d[5], d[6], d[7]
+    local source_features, target_features, target_features_out = d[9], d[10], d[11]
     if opt.gpuid >= 0 and opt.gpuid2 >= 0 then
       cutorch.setDevice(opt.gpuid)
     end
@@ -678,7 +722,12 @@ function eval(data)
     local context = context_proto[{{1, batch_l}, {1, source_l}}]
     -- forward prop encoder
     for t = 1, source_l do
-      local encoder_input = {source[t], table.unpack(rnn_state_enc)}
+      local encoder_input
+      if data.features_count > 0 then
+        encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc)}
+      else
+        encoder_input = {source[t], table.unpack(rnn_state_enc)}
+      end
       local out = encoder_clones[1]:forward(encoder_input)
       rnn_state_enc = out
       context[{{},t}]:copy(out[#out])
@@ -702,7 +751,12 @@ function eval(data)
     if opt.brnn == 1 then
       local rnn_state_enc = reset_state(init_fwd_enc, batch_l)
       for t = source_l, 1, -1 do
-        local encoder_input = {source[t], table.unpack(rnn_state_enc)}
+        local encoder_input
+        if data.features_count > 0 then
+          encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc)}
+        else
+          encoder_input = {source[t], table.unpack(rnn_state_enc)}
+        end
         local out = encoder_bwd_clones[1]:forward(encoder_input)
         rnn_state_enc = out
         context[{{},t}]:add(out[#out])
@@ -719,9 +773,17 @@ function eval(data)
     for t = 1, target_l do
       local decoder_input
       if opt.attn == 1 then
-        decoder_input = {target[t], context, table.unpack(rnn_state_dec)}
+        if data.features_count > 0 then
+          decoder_input = {target[t], table.unpack(target_features[t]), context, table.unpack(rnn_state_dec)}
+        else
+          decoder_input = {target[t], context, table.unpack(rnn_state_dec)}
+        end
       else
-        decoder_input = {target[t], context[{{},source_l}], table.unpack(rnn_state_dec)}
+        if data.features_count > 0 then
+          decoder_input = {target[t], table.unpack(target_features[t]), context[{{},source_l}], table.unpack(rnn_state_dec)}
+        else
+          decoder_input = {target[t], context[{{},source_l}], table.unpack(rnn_state_dec)}
+        end
       end
       local out = decoder_clones[1]:forward(decoder_input)
       rnn_state_dec = {}
@@ -732,7 +794,14 @@ function eval(data)
         table.insert(rnn_state_dec, out[j])
       end
       local pred = generator:forward(out[#out])
-      loss = loss + criterion:forward(pred, target_out[t])
+      local output
+      if data.features_count > 0 then
+        output = {target_out[t], table.unpack(target_features_out[t])}
+      else
+        output = {target_out[t]}
+      end
+
+      loss = loss + criterion:forward(pred, output)
     end
     nll = nll + loss
     total = total + nonzeros
@@ -804,6 +873,9 @@ function main()
   end
   print(string.format('Source max sent len: %d, Target max sent len: %d',
       valid_data.source:size(2), valid_data.target:size(2)))
+
+
+  print(string.format('Number of additional features: %d', valid_data.features_count))
 
   -- Build model
   if opt.train_from:len() == 0 then

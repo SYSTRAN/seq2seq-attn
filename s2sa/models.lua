@@ -24,9 +24,15 @@ function make_lstm(data, opt, model, use_chars)
     input_size = opt.num_kernels
   end
   local offset = 0
+  local context_offset = 0
   -- there will be 2*n+3 inputs
   local inputs = {}
   table.insert(inputs, nn.Identity()()) -- x (batch_size x max_word_l)
+  for i = 1,data.features_count do
+    table.insert(inputs, nn.Identity()()) -- table of features
+    offset = offset + 1
+    context_offset = context_offset + 1
+  end
   if model == 'dec' then
     table.insert(inputs, nn.Identity()()) -- all context (batch_size x source_l x rnn_size)
     offset = offset + 1
@@ -57,6 +63,9 @@ function make_lstm(data, opt, model, use_chars)
         end
         word_vecs.name = 'word_vecs' .. name
         x = word_vecs(inputs[1]) -- batch_size x word_vec_size
+        for i = 1,data.features_count do
+          x = nn.JoinTable(2)({x, inputs[1+i]})
+        end
       else
         local char_vecs = nn.LookupTable(data.char_size, opt.char_vec_size)
         char_vecs.name = 'word_vecs' .. name
@@ -69,11 +78,11 @@ function make_lstm(data, opt, model, use_chars)
           x = mlp(x)
         end
       end
-      input_size_L = input_size
+      input_size_L = input_size + data.total_features_size
       if model == 'dec' then
         if opt.input_feed == 1 then
           x = nn.JoinTable(2)({x, inputs[1+offset]}) -- batch_size x (word_vec_size + rnn_size)
-          input_size_L = input_size + rnn_size
+          input_size_L = input_size_L + rnn_size
         end
       end
     else
@@ -85,7 +94,7 @@ function make_lstm(data, opt, model, use_chars)
       if opt.multi_attn == L and model == 'dec' then
         local multi_attn = make_decoder_attn(data, opt, 1)
         multi_attn.name = 'multi_attn' .. L
-        x = multi_attn({x, inputs[2]})
+        x = multi_attn({x, inputs[2+context_offset]})
       end
       if dropout > 0 then
         x = nn.Dropout(dropout, nil, false)(x)
@@ -121,9 +130,9 @@ function make_lstm(data, opt, model, use_chars)
     if opt.attn == 1 then
       local decoder_attn = make_decoder_attn(data, opt)
       decoder_attn.name = 'decoder_attn'
-      decoder_out = decoder_attn({top_h, inputs[2]})
+      decoder_out = decoder_attn({top_h, inputs[2+context_offset]})
     else
-      decoder_out = nn.JoinTable(2)({top_h, inputs[2]})
+      decoder_out = nn.JoinTable(2)({top_h, inputs[2+context_offset]})
       decoder_out = nn.Tanh()(nn.LinearNoBias(opt.rnn_size*2, opt.rnn_size)(decoder_out))
     end
     if dropout > 0 then
@@ -168,13 +177,29 @@ function make_decoder_attn(data, opt, simple)
 end
 
 function make_generator(data, opt)
+  local split = nn.ConcatTable()
+  split:add(nn.Linear(opt.rnn_size, data.target_size))
+  for i = 1, data.features_count do
+    split:add(nn.Linear(opt.rnn_size, data.features_size[i]))
+  end
+
+  local softmax = nn.ParallelTable()
+  softmax:add(nn.LogSoftMax())
+  for i = 1, data.features_count do
+    softmax:add(nn.SoftMax())
+  end
+
   local model = nn.Sequential()
-  model:add(nn.Linear(opt.rnn_size, data.target_size))
-  model:add(nn.LogSoftMax())
+  :add(split)
+  :add(softmax)
+
+  local criterion = nn.ParallelCriterion(false)
   local w = torch.ones(data.target_size)
   w[1] = 0
-  criterion = nn.ClassNLLCriterion(w)
-  criterion.sizeAverage = false
+  criterion:add(nn.ClassNLLCriterion(w))
+  for i = 1, data.features_count do
+    criterion:add(nn.MSECriterion())
+  end
   return model, criterion
 end
 
