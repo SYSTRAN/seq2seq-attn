@@ -56,6 +56,12 @@ function copy(orig)
   return copy
 end
 
+function append_table(dst, src)
+  for i = 1, #src do
+    table.insert(dst, src[i])
+  end
+end
+
 local StateAll = torch.class("StateAll")
 
 function StateAll.initial(start)
@@ -165,12 +171,11 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
   local context = context_proto[{{}, {1,source_l}}]:clone() -- 1 x source_l x rnn_size
 
   for t = 1, source_l do
-    local encoder_input
+    local encoder_input = {source_input[t]}
     if model_opt.num_source_features > 0 then
-      encoder_input = {source_input[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc)}
-    else
-      encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+      append_table(encoder_input, source_features[t])
     end
+    append_table(encoder_input, rnn_state_enc)
     local out = model[1]:forward(encoder_input)
     rnn_state_enc = out
     context[{{},t}]:copy(out[#out])
@@ -194,12 +199,11 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
       rnn_state_enc[i]:zero()
     end
     for t = source_l, 1, -1 do
-      local encoder_input
+      local encoder_input = {source_input[t]}
       if model_opt.num_source_features > 0 then
-        encoder_input = {source_input[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc)}
-      else
-        encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+        append_table(encoder_input, source_features[t])
       end
+      append_table(encoder_input, rnn_state_enc)
       local out = model[4]:forward(encoder_input)
       rnn_state_enc = out
       context[{{},t}]:add(out[#out])
@@ -253,20 +257,16 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
         table.insert(decoder_input1_features, next_ys_features[i-1][j])
       end
     end
-    local decoder_input
-    if model_opt.attn == 1 then
-      if model_opt.num_target_features > 0 then
-        decoder_input = {decoder_input1, table.unpack(decoder_input1_features), context, table.unpack(rnn_state_dec)}
-      else
-        decoder_input = {decoder_input1, context, table.unpack(rnn_state_dec)}
-      end
-    else
-      if model_opt.num_target_features > 0 then
-        decoder_input = {decoder_input1, table.unpack(decoder_input1_features), context[{{}, source_l}], table.unpack(rnn_state_dec)}
-      else
-        decoder_input = {decoder_input1, context[{{}, source_l}], table.unpack(rnn_state_dec)}
-      end
+    local decoder_input = {decoder_input1}
+    if model_opt.num_target_features > 0 then
+      append_table(decoder_input, decoder_input1_features)
     end
+    if model_opt.attn == 1 then
+      append_table(decoder_input, {context})
+    else
+      append_table(decoder_input, {context[{{}, source_l}]})
+    end
+    append_table(decoder_input, rnn_state_dec)
     local out_decoder = model[2]:forward(decoder_input)
     local out = model[3]:forward(out_decoder[#out_decoder]) -- K x vocab_size
 
@@ -401,20 +401,16 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
       else
         decoder_input1 = gold[{{t-1}}]
       end
-      local decoder_input
-      if model_opt.attn == 1 then
-        if model_opt.num_target_features > 0 then
-          decoder_input = {decoder_input1, table.unpack(gold_features[t-1]), context[{{1}}], table.unpack(rnn_state_dec)}
-        else
-          decoder_input = {decoder_input1, context[{{1}}], table.unpack(rnn_state_dec)}
-        end
-      else
-        if model_opt.num_target_features > 0 then
-          decoder_input = {decoder_input1, table.unpack(gold_features[t-1]), context[{{1}, source_l}], table.unpack(rnn_state_dec)}
-        else
-          decoder_input = {decoder_input1, context[{{1}, source_l}], table.unpack(rnn_state_dec)}
-        end
+      local decoder_input = {decoder_input1}
+      if model_opt.num_target_features > 0 then
+        append_table(decoder_input, gold_features[t-1])
       end
+      if model_opt.attn == 1 then
+        append_table(decoder_input, {context[{{1}}]})
+      else
+        append_table(decoder_input, {context[{{1}, source_l}]})
+      end
+      append_table(decoder_input, rnn_state_dec)
       local out_decoder = model[2]:forward(decoder_input)
       local out = model[3]:forward(out_decoder[#out_decoder]) -- K x vocab_size
       rnn_state_dec = {} -- to be modified later
