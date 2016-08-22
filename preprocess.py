@@ -72,18 +72,26 @@ def pad(ls, length, symbol):
         return ls[:length]
     return ls + [symbol] * (length -len(ls))
 
+def save_features(name, indexers, outputfile):
+    if len(indexers) > 0:
+        print("Number of additional features on {} side: {}".format(name, len(indexers)))
+    for i in range(len(indexers)):
+        indexers[i].write(outputfile + "." + name + "_feature_" + str(i+1) + ".dict", )
+        print(" * {} feature {} of size: {}".format(name, i+1, len(indexers[i].d)))
+
 def get_data(args):
-    feature_indexers = []
+    src_feature_indexers = []
     src_indexer = Indexer(["<blank>","<unk>","<s>","</s>"])
     target_indexer = Indexer(["<blank>","<unk>","<s>","</s>"])
+    target_feature_indexers = []
     char_indexer = Indexer(["<blank>","<unk>","{","}"])
     char_indexer.add_w([src_indexer.PAD, src_indexer.UNK, src_indexer.BOS, src_indexer.EOS])
 
-    def init_feature_indexers(count):
+    def init_feature_indexers(indexers, count):
         for i in range(count):
-            feature_indexers.append(Indexer(["<blank>","unkn","<s>","</s>"]))
+            indexers.append(Indexer(["<blank>","<unk>","<s>","</s>"]))
 
-    def load_sentence(sent):
+    def load_sentence(sent, indexers):
         sent_seq = sent.strip().split()
         sent_words = ''
         sent_features = []
@@ -97,8 +105,8 @@ def get_data(args):
                 count = len(fields) - 1
                 if len(sent_features) == 0:
                     sent_features = [ [] for i in range(count) ]
-                if len(feature_indexers) == 0:
-                    init_feature_indexers(count)
+                if len(indexers) == 0:
+                    init_feature_indexers(indexers, count)
 
                 for i in range(1, len(fields)):
                     values = fields[i].split(',')
@@ -106,12 +114,20 @@ def get_data(args):
 
         return sent_words, sent_features
 
+    def add_features_vocab(orig_features, indexers):
+        if len(indexers) > 0:
+            index = 0
+            for features in orig_features:
+                for values in features:
+                    indexers[index].add_w(values)
+                index += 1
+
     def make_vocab(srcfile, targetfile, seqlength, max_word_l=0, chars=0):
         num_sents = 0
         for _, (src_orig, targ_orig) in \
                 enumerate(itertools.izip(open(srcfile,'r'), open(targetfile,'r'))):
-            src_orig, src_orig_features = load_sentence(src_orig)
-            targ_orig, targ_orig_features = load_sentence(targ_orig)
+            src_orig, src_orig_features = load_sentence(src_orig, src_feature_indexers)
+            targ_orig, targ_orig_features = load_sentence(targ_orig, target_feature_indexers)
             if chars == 1:
                 src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
                 targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
@@ -133,12 +149,8 @@ def get_data(args):
                         char_indexer.vocab[char] += 1
                 target_indexer.vocab[word] += 1
 
-            if len(feature_indexers) > 0:
-                index = 0
-                for features in src_orig_features:
-                    for values in features:
-                        feature_indexers[index].add_w(values)
-                    index += 1
+            add_features_vocab(src_orig_features, src_feature_indexers)
+            add_features_vocab(targ_orig_features, target_feature_indexers)
 
             for word in src:
                 if chars == 1:
@@ -156,39 +168,35 @@ def get_data(args):
                 max_word_l, max_sent_l=0,chars=0, unkfilter=0, shuffle=0):
 
 
-        def init_features_tensor():
+        def init_features_tensor(indexers):
             return [ np.zeros((num_sents,
                                newseqlength,
-                               len(feature_indexers[i].d)), dtype=int)
-                     for i in range(features_count) ]
+                               len(indexers[i].d)), dtype=int)
+                     for i in range(len(indexers)) ]
 
-        def load_features(orig_features, seqlength):
+        def load_features(orig_features, indexers, seqlength):
             if len(orig_features) == 0:
                 return None
 
             features = []
             for i in range(len(orig_features)):
-                features.append([[feature_indexers[i].BOS]]
-                                + orig_features[i]
-                                + [[feature_indexers[i].EOS]])
+                features.append([[indexers[i].BOS]] + orig_features[i] + [[indexers[i].EOS]])
 
             for i in range(len(features)):
-                features[i] = pad(features[i], seqlength,
-                                  [feature_indexers[i].PAD])
+                features[i] = pad(features[i], seqlength, [indexers[i].PAD])
                 for j in range(len(features[i])):
-                    features[i][j] = feature_indexers[i].convert_sequence(features[i][j])
-                    features[i][j] = [ 1 if k+1 in features[i][j] else 0 for k in range(len(feature_indexers[i].d)) ]
+                    features[i][j] = indexers[i].convert_sequence(features[i][j])
+                    features[i][j] = [ 1 if k+1 in features[i][j] else 0 for k in range(len(indexers[i].d)) ]
                 features[i] = np.array(features[i], dtype=int)
             return features
 
         newseqlength = seqlength + 2 #add 2 for EOS and BOS
-        features_count = len(feature_indexers)
         targets = np.zeros((num_sents, newseqlength), dtype=int)
-        targets_features = init_features_tensor()
-        targets_features_output = init_features_tensor()
+        targets_features = init_features_tensor(target_feature_indexers)
+        targets_features_output = init_features_tensor(target_feature_indexers)
         target_output = np.zeros((num_sents, newseqlength), dtype=int)
         sources = np.zeros((num_sents, newseqlength), dtype=int)
-        sources_features = init_features_tensor()
+        sources_features = init_features_tensor(src_feature_indexers)
         source_lengths = np.zeros((num_sents,), dtype=int)
         target_lengths = np.zeros((num_sents,), dtype=int)
         if chars==1:
@@ -198,8 +206,8 @@ def get_data(args):
         sent_id = 0
         for _, (src_orig, targ_orig) in \
                 enumerate(itertools.izip(open(srcfile,'r'), open(targetfile,'r'))):
-            src_orig, src_orig_features = load_sentence(src_orig)
-            targ_orig, targ_orig_features = load_sentence(targ_or
+            src_orig, src_orig_features = load_sentence(src_orig, src_feature_indexers)
+            targ_orig, targ_orig_features = load_sentence(targ_orig, target_feature_indexers)
             if chars == 1:
                 src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
                 targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
@@ -263,12 +271,13 @@ def get_data(args):
             if chars == 1:
                 sources_char[sent_id] = np.array(src_char, dtype=int)
 
-            source_features = load_features(src_orig_features, newseqlength)
-            target_features = load_features(targ_orig_features, newseqlength+1)
+            source_features = load_features(src_orig_features, src_feature_indexers, newseqlength)
+            target_features = load_features(targ_orig_features, target_feature_indexers, newseqlength+1)
 
-            for i in range(features_count):
+            for i in range(len(target_feature_indexers)):
                 targets_features[i][sent_id] = np.array(target_features[i][:-1], dtype=int)
                 targets_features_output[i][sent_id] = np.array(target_features[i][1:], dtype=int)
+            for i in range(len(src_feature_indexers)):
                 sources_features[i][sent_id] = np.array(source_features[i]
 
             sent_id += 1
@@ -301,8 +310,9 @@ def get_data(args):
         target_l = target_lengths[source_sort]
         source_l = source_lengths[source_sort]
 
-        for i in range(features_count):
+        for i in range(len(src_feature_indexers)):
             sources_features[i] = sources_features[i][source_sort]
+        for i in range(len(target_feature_indexers)):
             targets_features[i] = targets_features[i][source_sort]
             targets_features_output[i] = targets_features_output[i][source_sort]
 
@@ -346,12 +356,15 @@ def get_data(args):
         f["target_nonzeros"] = np.array(nonzeros, dtype=int)
         f["source_size"] = np.array([len(src_indexer.d)])
         f["target_size"] = np.array([len(target_indexer.d)])
-        f["features_count"] = np.array([features_count])
-        for i in range(features_count):
+        f["num_source_features"] = np.array([len(src_feature_indexers)])
+        f["num_target_features"] = np.array([len(target_feature_indexers)])
+        for i in range(len(src_feature_indexers)):
             f["source_feature_" + str(i+1)] = sources_features[i]
+            f["source_feature_" + str(i+1) + "_size"] = np.array([len(src_feature_indexers[i].d)])
+        for i in range(len(target_feature_indexers)):
             f["target_feature_" + str(i+1)] = targets_features[i]
             f["target_feature_output_" + str(i+1)] = targets_features_output[i]
-            f["feature_" + str(i+1) + "_size"] = np.array([len(feature_indexers[i].d)])
+            f["target_feature_" + str(i+1) + "_size"] = np.array([len(target_feature_indexers[i].d)])
         if chars == 1:
             del sources, targets, target_output
             sources_char = sources_char[source_sort]
@@ -398,16 +411,13 @@ def get_data(args):
         char_indexer.write(args.outputfile + ".char.dict", args.chars)
         print("Character vocab size: {}".format(len(char_indexer.vocab)))
 
+    save_features('source', src_feature_indexers, args.outputfile)
+    save_features('target', target_feature_indexers, args.outputfile)
+
     print("Source vocab size: Original = {}, Pruned = {}".format(len(src_indexer.vocab),
                                                           len(src_indexer.d)))
     print("Target vocab size: Original = {}, Pruned = {}".format(len(target_indexer.vocab),
                                                           len(target_indexer.d)))
-
-    if len(feature_indexers) > 0:
-        print("Number of additional features: {}".format(len(feature_indexers)))
-    for i in range(len(feature_indexers)):
-        feature_indexers[i].write(args.outputfile + ".feature_" + str(i+1) + ".dict", )
-        print(" * feature " + str(i+1) + " of size: {}".format(len(feature_indexers[i].d)))
 
     max_sent_l = 0
     max_sent_l = convert(args.srcvalfile, args.targetvalfile, args.batchsize, args.seqlength,

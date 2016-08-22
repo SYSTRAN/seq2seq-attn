@@ -2,23 +2,6 @@
 -- Manages encoder/decoder data matrices.
 --
 
-function load_embeddings(labels, vocab_size)
-  local size = labels:size(1)
-  local embeddings = {}
-
-  for i = 1,size do
-    local sent_labels = labels[i]
-    local sent_l = sent_labels:size(1)
-    local sent_emb = torch.Tensor(sent_l, vocab_size):zero()
-    for j = 1,sent_l do
-      sent_emb[j][sent_labels[j]] = 1
-    end
-    table.insert(embeddings, sent_emb)
-  end
-
-  return embeddings
-end
-
 function features_per_timestep(features)
   local data = {}
 
@@ -57,28 +40,35 @@ function data:__init(opt, data_file)
   self.batch_l = f:read('batch_l'):all()
   self.source_l = f:read('batch_w'):all() --max source length each batch
 
-  self.features_count = f:read('features_count'):all()[1]
+  self.num_source_features = f:read('num_source_features'):all()[1]
+  self.num_target_features = f:read('num_target_features'):all()[1]
   self.source_features = {}
   self.target_features = {}
   self.target_features_output = {}
-  self.features_size = {}
-  self.total_features_size = 0
+  self.source_features_size = {}
+  self.target_features_size = {}
+  self.total_source_features_size = 0
+  self.total_target_features_size = 0
 
-  for i = 1,self.features_count do
+  for i = 1,self.num_source_features do
     table.insert(self.source_features, f:read('source_feature_' .. i):all())
+    local feature_size = f:read('source_feature_' .. i .. '_size'):all()[1]
+    table.insert(self.source_features_size, feature_size)
+    self.total_source_features_size = self.total_source_features_size + feature_size
+  end
+  for i = 1,self.num_target_features do
     table.insert(self.target_features, f:read('target_feature_' .. i):all())
     table.insert(self.target_features_output,
       f:read('target_feature_output_' .. i):all())
-
-    local feature_size = f:read('feature_' .. i .. '_size'):all()[1]
-    table.insert(self.features_size, feature_size)
-    self.total_features_size = self.total_features_size + feature_size
+    local feature_size = f:read('target_feature_' .. i .. '_size'):all()[1]
+    table.insert(self.target_features_size, feature_size)
+    self.total_target_features_size = self.total_target_features_size + feature_size
   end
 
   if opt.start_symbol == 0 then
     self.source_l:add(-2)
     self.source = self.source[{{},{2, self.source:size(2)-1}}]
-    for i = 1,self.features_count do
+    for i = 1,self.num_source_features do
       self.source_features[i] = self.source_features[i][{{},{2, self.source_features[i]:size(2)-1}}]
     end
   end
@@ -145,15 +135,7 @@ function data:__init(opt, data_file)
     local target_feats = {}
     local target_feats_output = {}
 
-    for j = 1,self.features_count do
-      table.insert(target_feats_output,
-        self.target_features_output[j]:sub(self.batch_idx[i],
-          self.batch_idx[i]+self.batch_l[i]-1,
-          1, self.target_l[i]):transpose(1,2):double())
-      table.insert(target_feats,
-        self.target_features[j]:sub(self.batch_idx[i],
-          self.batch_idx[i]+self.batch_l[i]-1,
-          1, self.target_l[i]):transpose(1,2):double())
+    for j = 1,self.num_source_features do
       table.insert(source_feats,
         self.source_features[j]:sub(self.batch_idx[i],
           self.batch_idx[i]+self.batch_l[i]-1,
@@ -162,6 +144,17 @@ function data:__init(opt, data_file)
         source_feats[j] = source_feats[j]:index(1, source_l_rev[{{max_source_l-self.source_l[i]+1,
               max_source_l}}])
       end
+    end
+
+    for j = 1,self.num_target_features do
+      table.insert(target_feats_output,
+        self.target_features_output[j]:sub(self.batch_idx[i],
+          self.batch_idx[i]+self.batch_l[i]-1,
+          1, self.target_l[i]):transpose(1,2):double())
+      table.insert(target_feats,
+        self.target_features[j]:sub(self.batch_idx[i],
+          self.batch_idx[i]+self.batch_l[i]-1,
+          1, self.target_l[i]):transpose(1,2):double())
     end
 
     -- convert table of timesteps per feature to a table of features per timestep

@@ -135,7 +135,8 @@ function train(train_data, valid_data)
   params, grad_params = {}, {}
   opt.train_perf = {}
   opt.val_perf = {}
-  opt.num_features = train_data.features_count
+  opt.num_source_features = train_data.num_source_features
+  opt.num_target_features = train_data.num_target_features
 
   for i = 1, #layers do
     if opt.gpuid2 >= 0 then
@@ -272,7 +273,7 @@ function train(train_data, valid_data)
     table.insert(init_bwd_dec, h_init:clone())
   end
 
-  dec_offset = 3+train_data.features_count -- offset depends on input feeding
+  dec_offset = 3+train_data.num_target_features -- offset depends on input feeding
   if opt.input_feed == 1 then
     dec_offset = dec_offset + 1
   end
@@ -366,7 +367,7 @@ function train(train_data, valid_data)
       for t = 1, source_l do
         encoder_clones[t]:training()
         local encoder_input
-        if data.features_count > 0 then
+        if data.num_source_features > 0 then
           encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc[t-1])}
         else
           encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
@@ -382,7 +383,7 @@ function train(train_data, valid_data)
         for t = source_l, 1, -1 do
           encoder_bwd_clones[t]:training()
           local encoder_input
-          if data.features_count > 0 then
+          if data.num_source_features > 0 then
             encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc_bwd[t+1])}
           else
             encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
@@ -420,13 +421,13 @@ function train(train_data, valid_data)
         decoder_clones[t]:training()
         local decoder_input
         if opt.attn == 1 then
-          if data.features_count > 0 then
+          if data.num_target_features > 0 then
             decoder_input = {target[t], table.unpack(target_features[t]), context, table.unpack(rnn_state_dec[t-1])}
           else
             decoder_input = {target[t], context, table.unpack(rnn_state_dec[t-1])}
           end
         else
-          if data.features_count > 0 then
+          if data.num_target_features > 0 then
             decoder_input = {target[t], table.unpack(target_features[t]), context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
           else
             decoder_input = {target[t], context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
@@ -455,7 +456,7 @@ function train(train_data, valid_data)
       for t = target_l, 1, -1 do
         local pred = generator:forward(preds[t])
         local output
-        if data.features_count > 0 then
+        if data.num_target_features > 0 then
           output = {target_out[t], table.unpack(target_features_out[t])}
         else
           output = {target_out[t]}
@@ -466,13 +467,13 @@ function train(train_data, valid_data)
         drnn_state_dec[#drnn_state_dec]:add(dl_dtarget)
         local decoder_input
         if opt.attn == 1 then
-          if data.features_count > 0 then
+          if data.num_target_features > 0 then
             decoder_input = {target[t], table.unpack(target_features[t]), context, table.unpack(rnn_state_dec[t-1])}
           else
             decoder_input = {target[t], context, table.unpack(rnn_state_dec[t-1])}
           end
         else
-          if data.features_count > 0 then
+          if data.num_target_features > 0 then
             decoder_input = {target[t], table.unpack(target_features[t]), context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
           else
             decoder_input = {target[t], context[{{}, source_l}], table.unpack(rnn_state_dec[t-1])}
@@ -481,19 +482,19 @@ function train(train_data, valid_data)
         local dlst = decoder_clones[t]:backward(decoder_input, drnn_state_dec)
         -- accumulate encoder/decoder grads
         if opt.attn == 1 then
-          encoder_grads:add(dlst[2+data.features_count])
+          encoder_grads:add(dlst[2+data.num_target_features])
           if opt.brnn == 1 then
-            encoder_bwd_grads:add(dlst[2+data.features_count])
+            encoder_bwd_grads:add(dlst[2+data.num_target_features])
           end
         else
-          encoder_grads[{{}, source_l}]:add(dlst[2+data.features_count])
+          encoder_grads[{{}, source_l}]:add(dlst[2+data.num_target_features])
           if opt.brnn == 1 then
-            encoder_bwd_grads[{{}, 1}]:add(dlst[2+data.features_count])
+            encoder_bwd_grads[{{}, 1}]:add(dlst[2+data.num_target_features])
           end
         end
         drnn_state_dec[#drnn_state_dec]:zero()
         if opt.input_feed == 1 then
-          drnn_state_dec[#drnn_state_dec]:add(dlst[3+data.features_count])
+          drnn_state_dec[#drnn_state_dec]:add(dlst[3+data.num_target_features])
         end
         for j = dec_offset, #dlst do
           drnn_state_dec[j-dec_offset+1]:copy(dlst[j])
@@ -526,7 +527,7 @@ function train(train_data, valid_data)
 
       for t = source_l, 1, -1 do
         local encoder_input
-        if data.features_count > 0 then
+        if data.num_source_features > 0 then
           encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc[t-1])}
         else
           encoder_input = {source[t], table.unpack(rnn_state_enc[t-1])}
@@ -539,7 +540,7 @@ function train(train_data, valid_data)
           end
         end
         local dlst = encoder_clones[t]:backward(encoder_input, drnn_state_enc)
-        for j = 1+data.features_count, #drnn_state_enc do
+        for j = 1+data.num_source_features, #drnn_state_enc do
           drnn_state_enc[j]:copy(dlst[j+1])
         end
       end
@@ -554,7 +555,7 @@ function train(train_data, valid_data)
         end
         for t = 1, source_l do
           local encoder_input
-          if data.features_count > 0 then
+          if data.num_source_features > 0 then
             encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc_bwd[t+1])}
           else
             encoder_input = {source[t], table.unpack(rnn_state_enc_bwd[t+1])}
@@ -567,7 +568,7 @@ function train(train_data, valid_data)
             end
           end
           local dlst = encoder_bwd_clones[t]:backward(encoder_input, drnn_state_enc)
-          for j = 1+data.features_count, #drnn_state_enc do
+          for j = 1+data.num_source_features, #drnn_state_enc do
             drnn_state_enc[j]:copy(dlst[j+1])
           end
         end
@@ -723,7 +724,7 @@ function eval(data)
     -- forward prop encoder
     for t = 1, source_l do
       local encoder_input
-      if data.features_count > 0 then
+      if data.num_source_features > 0 then
         encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc)}
       else
         encoder_input = {source[t], table.unpack(rnn_state_enc)}
@@ -752,7 +753,7 @@ function eval(data)
       local rnn_state_enc = reset_state(init_fwd_enc, batch_l)
       for t = source_l, 1, -1 do
         local encoder_input
-        if data.features_count > 0 then
+        if data.num_source_features > 0 then
           encoder_input = {source[t], table.unpack(source_features[t]), table.unpack(rnn_state_enc)}
         else
           encoder_input = {source[t], table.unpack(rnn_state_enc)}
@@ -773,13 +774,13 @@ function eval(data)
     for t = 1, target_l do
       local decoder_input
       if opt.attn == 1 then
-        if data.features_count > 0 then
+        if data.num_target_features > 0 then
           decoder_input = {target[t], table.unpack(target_features[t]), context, table.unpack(rnn_state_dec)}
         else
           decoder_input = {target[t], context, table.unpack(rnn_state_dec)}
         end
       else
-        if data.features_count > 0 then
+        if data.num_target_features > 0 then
           decoder_input = {target[t], table.unpack(target_features[t]), context[{{},source_l}], table.unpack(rnn_state_dec)}
         else
           decoder_input = {target[t], context[{{},source_l}], table.unpack(rnn_state_dec)}
@@ -795,7 +796,7 @@ function eval(data)
       end
       local pred = generator:forward(out[#out])
       local output
-      if data.features_count > 0 then
+      if data.num_target_features > 0 then
         output = {target_out[t], table.unpack(target_features_out[t])}
       else
         output = {target_out[t]}
@@ -875,7 +876,8 @@ function main()
       valid_data.source:size(2), valid_data.target:size(2)))
 
 
-  print(string.format('Number of additional features: %d', valid_data.features_count))
+  print(string.format('Number of additional features on source side: %d', valid_data.num_source_features))
+  print(string.format('Number of additional features on target side: %d', valid_data.num_target_features))
 
   -- Build model
   if opt.train_from:len() == 0 then
