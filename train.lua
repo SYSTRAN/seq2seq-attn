@@ -756,7 +756,7 @@ function eval(data)
       end      
       local rnn_state_enc = reset_state(init_fwd_enc, batch_l)
       local context = context_proto[{{1, batch_l}, {1, source_l}}]
-      local position_t = position_t_proto[{{1, batch_l}}]
+      local position_t_proto = torch.zeros(opt.max_batch_l, 1)
 
       -- forward prop encoder
       for t = 1, source_l do
