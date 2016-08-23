@@ -217,13 +217,13 @@ function train(train_data, valid_data)
    -- prototypes for gradients so there is no need to clone
    encoder_grad_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
    encoder_bwd_grad_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
-   context_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
+   context_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size+2*opt.position)
    -- prototypes for position vector
    position_t_proto = torch.zeros(opt.max_batch_l, 1)
    -- need more copies of the above if using two gpus
    if opt.gpuid2 >= 0 then
       encoder_grad_proto2 = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
-      context_proto2 = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
+      context_proto2 = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size+2*opt.position)
       encoder_bwd_grad_proto2 = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)      
    end
       
@@ -402,12 +402,14 @@ function train(train_data, valid_data)
             append_table(encoder_input, rnn_state_enc[t-1])
 	    local out = encoder_clones[t]:forward(encoder_input)
 	    rnn_state_enc[t] = out
-      context[{{},t}]:copy(out[#out])
       if opt.position == 1 then
         for bi = 1, batch_l do
-          context[bi][t][1]=math.log(1+t)
-          context[bi][t][2]=math.log(1+source_l)
+    	    context[{bi,t,{1,opt.rnn_size}}]:copy(out[#out][bi])
+          context[bi][t][opt.rnn_size+1]=1+math.log(t)
+          context[bi][t][opt.rnn_size+2]=1+math.log(source_l)
         end
+      else
+        context[{{},t}]:copy(out[#out])
       end
 	 end
 
@@ -537,7 +539,7 @@ function train(train_data, valid_data)
 	       drnn_state_dec[#drnn_state_dec]:add(dlst[3+data.num_target_features])
 	    end	    
             local offset = dec_offset+data.num_target_features
-	    for j = offset, #dlst-opt.position*1 do
+	    for j = offset, #dlst-opt.position*2 do
 	       drnn_state_dec[j-offset+1]:copy(dlst[j])
 	    end	    
 	 end
