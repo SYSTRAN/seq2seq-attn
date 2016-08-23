@@ -654,13 +654,7 @@ function load_sentence(line)
       end
 
       for i= 2, #field do
-        local feat
-        if i == #field then
-          feat = string.sub(field[i], 2, -1)
-        else
-          feat = string.sub(field[i], 2, -2)
-        end
-        local values = string.split(feat, ',')
+        local values = field[i]:split(',')
         table.insert(features[#features], values)
       end
     end
