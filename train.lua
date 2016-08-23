@@ -343,6 +343,8 @@ function train(train_data, valid_data)
   function train_batch(data, epoch)
     opt.num_source_features = data.num_source_features
     opt.num_target_features = data.num_target_features
+    opt.source_features_lookup = data.source_features_use_lookup
+    opt.target_features_lookup = data.target_features_use_lookup
     local train_nonzeros = 0
     local train_loss = 0
     local batch_order = torch.randperm(data.length) -- shuffle mini batch order

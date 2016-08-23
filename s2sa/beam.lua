@@ -126,7 +126,13 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
     for i = 1, n do
       table.insert(next_ys_features, {})
       for j = 1, model_opt.num_target_features do
-        table.insert(next_ys_features[i], torch.DoubleTensor(K, #idx2feature_targ[j]):zero())
+        local t
+        if model_opt.target_features_lookup[j] == true then
+          t = torch.DoubleTensor(K):fill(1)
+        else
+          t = torch.DoubleTensor(K, #idx2feature_targ[j]):zero()
+        end
+        table.insert(next_ys_features[i], t)
       end
     end
   end
@@ -145,7 +151,11 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
     table.insert(attn_argmax[1], initial)
     next_ys[1][k] = State.next(initial)
     for j = 1, model_opt.num_target_features do
-      next_ys_features[1][j][k][START] = 1
+      if model_opt.target_features_lookup[j] == true then
+        next_ys_features[1][j][k] = START
+      else
+        next_ys_features[1][j][k][START] = 1
+      end
     end
   end
 
@@ -271,7 +281,14 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
     local out = model[3]:forward(out_decoder[#out_decoder]) -- K x vocab_size
 
     for j = 1, model_opt.num_target_features do
-      next_ys_features[i][j]:copy(out[1+j])
+      if model_opt.target_features_lookup[j] == true then
+        for k = 1, K do
+          local _, idx = torch.sort(out[1+j][k], true)
+          next_ys_features[i][j][k] = idx[1]
+        end
+      else
+        next_ys_features[i][j]:copy(out[1+j])
+      end
     end
 
     rnn_state_dec = {} -- to be modified later
@@ -335,10 +352,10 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
         table.insert(pred_feats, {})
         for j = 1, model_opt.num_target_features do
           local hyp = {}
-          local lk, idx = torch.sort(next_ys_features[i][j][k], true)
-          if lk[1] < 0 then -- logsoftmax => single class classification
-            table.insert(hyp, idx[1])
+          if model_opt.target_features_lookup[j] == true then
+            table.insert(hyp, next_ys_features[i][j][k])
           else
+            local lk, idx = torch.sort(next_ys_features[i][j][k], true)
             for l = 1, lk:size(1) do
               if lk[1] - lk[l] < 0.05 then
                 table.insert(hyp, idx[l])
@@ -493,25 +510,31 @@ function sent2wordidx(sent, word2idx, start_symbol)
   return torch.LongTensor(t), u
 end
 
-function get_feature_embedding(values, feature2idx, vocab_size)
-  local emb = {}
-  for i = 1, vocab_size do
-    table.insert(emb, 0)
+function get_feature_embedding(values, feature2idx, vocab_size, use_lookup)
+  if use_lookup == true then
+    local t = torch.Tensor(1)
+    t[1] = feature2idx[values[1]]
+    return t
+  else
+    local emb = {}
+    for i = 1, vocab_size do
+      table.insert(emb, 0)
+    end
+    for i = 1, #values do
+      local idx = feature2idx[values[i]]
+      emb[idx] = 1
+    end
+    return torch.DoubleTensor(emb):view(1,#emb)
   end
-  for i = 1, #values do
-    local idx = feature2idx[values[i]]
-    emb[idx] = 1
-  end
-  return torch.DoubleTensor(emb):view(1,#emb)
 end
 
-function features2featureidx(features, feature2idx, idx2feature, start_symbol)
+function features2featureidx(features, feature2idx, idx2feature, use_lookup, start_symbol)
   local out = {}
 
   if start_symbol == 1 then
     table.insert(out, {})
     for j = 1, #feature2idx do
-      local emb = get_feature_embedding({START_WORD}, feature2idx[j], #idx2feature[j])
+      local emb = get_feature_embedding({START_WORD}, feature2idx[j], #idx2feature[j], use_lookup[j])
       table.insert(out[#out], emb)
     end
   end
@@ -519,7 +542,7 @@ function features2featureidx(features, feature2idx, idx2feature, start_symbol)
   for i = 1, #features do
     table.insert(out, {})
     for j = 1, #feature2idx do
-      local emb = get_feature_embedding(features[i][j], feature2idx[j], #idx2feature[j])
+      llocal emb = get_feature_embedding(features[i][j], feature2idx[j], #idx2feature[j], use_lookup[j])
       table.insert(out[#out], emb)
     end
   end
@@ -527,7 +550,7 @@ function features2featureidx(features, feature2idx, idx2feature, start_symbol)
   if start_symbol == 1 then
     table.insert(out, {})
     for j = 1, #feature2idx do
-      local emb = get_feature_embedding({END_WORD}, feature2idx[j], #idx2feature[j])
+      local emb = get_feature_embedding({END_WORD}, feature2idx[j], #idx2feature[j], use_lookup[j])
       table.insert(out[#out], emb)
     end
   end
@@ -728,6 +751,18 @@ function init(arg, resourcesDir)
   model_opt.num_source_features = model_opt.num_source_features or 0
   model_opt.num_target_features = model_opt.num_target_features or 0
 
+
+  if model_opt.source_features_lookup == nil then
+    model_opt.source_features_lookup = {}
+    for i = 1, model_opt.num_source_features do
+      table.insert(model_opt.source_features_lookup, false)
+    end
+    model_opt.target_features_lookup = {}
+    for i = 1, model_opt.num_target_features do
+      table.insert(model_opt.target_features_lookup, false)
+    end
+  end
+
   idx2word_src = idx2key(opt.src_dict)
   word2idx_src = flip_table(idx2word_src)
   idx2word_targ = idx2key(opt.targ_dict)
@@ -841,7 +876,7 @@ function search(line)
   print('SENT ' .. sent_id .. ': ' ..line)
   line, source_features_str = load_sentence(line)
   local source, source_str
-  local source_features = features2featureidx(source_features_str, feature2idx_src, idx2feature_src, model_opt.start_symbol)
+  local source_features = features2featureidx(source_features_str, feature2idx_src, idx2feature_src, model_opt.source_features_lookup, model_opt.start_symbol)
   if model_opt.use_chars_enc == 0 then
     source, source_str = sent2wordidx(line, word2idx_src, model_opt.start_symbol)
   else
@@ -850,7 +885,7 @@ function search(line)
   if opt.score_gold == 1 then
     gold_line, target_features_str = load_sentence(gold[sent_id])
     target, target_str = sent2wordidx(gold_line, word2idx_targ, 1)
-    target_features = features2featureidx(target_features_str, feature2idx_targ, idx2feature_targ, 1)
+    target_features = features2featureidx(target_features_str, feature2idx_targ, idx2feature_targ, model_opt.target_features_lookup, 1)
   end
   state = State.initial(START)
   pred, pred_features, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(model,
