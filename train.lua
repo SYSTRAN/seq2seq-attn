@@ -217,13 +217,13 @@ function train(train_data, valid_data)
    -- prototypes for gradients so there is no need to clone
    encoder_grad_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
    encoder_bwd_grad_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
-   context_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size+2*opt.position)
+   context_proto = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
    -- prototypes for position vector
    position_t_proto = torch.zeros(opt.max_batch_l, 1)
    -- need more copies of the above if using two gpus
    if opt.gpuid2 >= 0 then
       encoder_grad_proto2 = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
-      context_proto2 = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size+2*opt.position)
+      context_proto2 = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)
       encoder_bwd_grad_proto2 = torch.zeros(opt.max_batch_l, opt.max_sent_l, opt.rnn_size)      
    end
       
@@ -402,14 +402,12 @@ function train(train_data, valid_data)
             append_table(encoder_input, rnn_state_enc[t-1])
 	    local out = encoder_clones[t]:forward(encoder_input)
 	    rnn_state_enc[t] = out
-      if opt.position == 1 then
+      context[{{},t}]:copy(out[#out])
+      if opt.position == 2 then
         for bi = 1, batch_l do
-    	    context[{bi,t,{1,opt.rnn_size}}]:copy(out[#out][bi])
-          context[bi][t][opt.rnn_size+1]=1+math.log(t)
-          context[bi][t][opt.rnn_size+2]=1+math.log(source_l)
+          context[bi][t][1]=math.log(1+t)
+          context[bi][t][2]=math.log(1+source_l)
         end
-      else
-        context[{{},t}]:copy(out[#out])
       end
 	 end
 
@@ -464,7 +462,7 @@ function train(train_data, valid_data)
                append_table(decoder_input, {context[{{}, source_l}]})
 	    end
             append_table(decoder_input, rnn_state_dec[t-1])
-      if opt.position == 1 then
+      if opt.position >= 1 then
         for bi = 1, batch_l do
           position_t[bi][1]=math.log(1+t)
         end
@@ -515,7 +513,7 @@ function train(train_data, valid_data)
                append_table(decoder_input, {context[{{}, source_l}]})
 	    end
             append_table(decoder_input, rnn_state_dec[t-1])
-      if opt.position == 1 then
+      if opt.position >= 1 then
          for bi = 1, batch_l do
             position_t[bi][1]=math.log(1+t)
           end
@@ -539,7 +537,9 @@ function train(train_data, valid_data)
 	       drnn_state_dec[#drnn_state_dec]:add(dlst[3+data.num_target_features])
 	    end	    
             local offset = dec_offset+data.num_target_features
-	    for j = offset, #dlst-opt.position*2 do
+      local maxdlst=#dlst
+      if opt.position then maxdlst=maxdlst-1; end
+	    for j = offset, maxdlst do
 	       drnn_state_dec[j-offset+1]:copy(dlst[j])
 	    end	    
 	 end
@@ -580,7 +580,14 @@ function train(train_data, valid_data)
 	       if t == source_l then
 		  drnn_state_enc[#drnn_state_enc]:add(encoder_grads[{{},t}])
 	       end
-	    end	    		  
+	    end
+      if opt.position == 2 then
+        for bi = 1, batch_l do
+          -- no backward propagation on the first 2 hijacked states
+          drnn_state_enc[#drnn_state_enc][bi][1]=0
+          drnn_state_enc[#drnn_state_enc][bi][2]=0
+        end	
+      end    		  
 	    local dlst = encoder_clones[t]:backward(encoder_input, drnn_state_enc)
 	    for j = 1, #drnn_state_enc do
 	       drnn_state_enc[j]:copy(dlst[j+1+data.num_source_features])
@@ -819,7 +826,7 @@ function eval(data)
             append_table(decoder_input, {context[{{}, source_l}]})
          end
          append_table(decoder_input, rnn_state_dec)
-         if opt.position ==1 then
+         if opt.position >=1 then
            for bi = 1, batch_l do
               position_t[bi][1]=math.log(1+t)
             end
