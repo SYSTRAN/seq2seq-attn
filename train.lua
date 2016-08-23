@@ -539,8 +539,8 @@ function train(train_data, valid_data)
           end
         end
         local dlst = encoder_clones[t]:backward(encoder_input, drnn_state_enc)
-        for j = 1+data.num_source_features, #drnn_state_enc do
-          drnn_state_enc[j]:copy(dlst[j+1])
+        for j = 1, #drnn_state_enc do
+          drnn_state_enc[j]:copy(dlst[j+1+data.num_source_features])
         end
       end
 
@@ -566,9 +566,8 @@ function train(train_data, valid_data)
             end
           end
           local dlst = encoder_bwd_clones[t]:backward(encoder_input, drnn_state_enc)
-          for j = 1+data.num_source_features, #drnn_state_enc do
-            drnn_state_enc[j]:copy(dlst[j+1])
-          end
+          for j = 1, #drnn_state_enc do
+            drnn_state_enc[j]:copy(dlst[j+1+data.num_source_features])
         end
       end
 
