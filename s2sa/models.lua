@@ -68,7 +68,22 @@ function make_lstm(data, opt, model, use_chars)
         word_vecs.name = 'word_vecs' .. name
         x = word_vecs(inputs[1]) -- batch_size x word_vec_size
         for i = 1, num_features do
-          x = nn.JoinTable(2)({x, inputs[1+i]})
+          local feat_x
+          if (model == 'enc' and data.source_features_use_lookup[i] == true)
+            or (model == 'dec' and data.target_features_use_lookup[i] == true) then
+            local feat_vecs
+            if model == 'enc' then
+              feat_vecs = nn.LookupTable(data.source_features_size[i],
+                                         data.source_features_vec_size[i])
+            else
+              feat_vecs = nn.LookupTable(data.target_features_size[i],
+                                         data.target_features_vec_size[i])
+            end
+            feat_x = feat_vecs(inputs[1+i])
+          else
+            feat_x = inputs[1+i]
+          end
+          x = nn.JoinTable(2)({x, feat_x})
         end
       else
         local char_vecs = nn.LookupTable(data.char_size, opt.char_vec_size)
@@ -193,7 +208,11 @@ function make_generator(data, opt)
   local softmax = nn.ParallelTable()
   softmax:add(nn.LogSoftMax())
   for i = 1, data.num_target_features do
-    softmax:add(nn.SoftMax())
+    if data.target_features_use_lookup[i] == true then
+      softmax:add(nn.LogSoftMax())
+    else
+      softmax:add(nn.SoftMax())
+    end
   end
 
   local model = nn.Sequential()
@@ -207,9 +226,17 @@ function make_generator(data, opt)
   classnll.sizeAverage = false
   criterion:add(classnll)
   for i = 1, data.num_target_features do
-    local mse = nn.MSECriterion()
-    mse.sizeAverage = false
-    criterion:add(mse)
+    if data.target_features_use_lookup[i] == true then
+      local w = torch.ones(data.target_features_size[i])
+      w[1] = 0
+      local classnll = nn.ClassNLLCriterion(w)
+      classnll.sizeAverage = false
+      criterion:add(classnll)
+    else
+      local mse = nn.MSECriterion()
+      mse.sizeAverage = false
+      criterion:add(mse)
+    end
   end
   return model, criterion
 end

@@ -40,34 +40,52 @@ function find_powers_of_2(value)
   return powers
 end
 
-function id_to_embedding(values, size, id_max_size)
+function bitfield_to_ids(values, id_max_size)
   local powers = {}
-  local total_values = 0
   for k = 1, values:size(1) do
     local pows = find_powers_of_2(values[k])
-    total_values = total_values + #pows
     table.insert(powers, pows)
   end
-  local emb = torch.Tensor(size):zero()
+
+  local ids = {}
   local offset = 0
   for k = 1, #powers do
     for i = 1, #powers[k] do
-      emb[powers[k][i]+1+offset] = 1.0 / total_values
+      local id = powers[k][i]+1+offset
+      table.insert(ids, id)
     end
     offset = offset + id_max_size
   end
-  return emb
+
+  return ids
 end
 
-function generate_vecs(features, sizes, id_max_size)
+function bitfield_to_vec(values, size, id_max_size)
+  local ids = bitfield_to_ids(values, id_max_size)
+  local vec = torch.Tensor(size):zero()
+  for i = 1, #ids do
+    vec[ids[i]] = 1.0 / #ids
+  end
+  return vec
+end
+
+function generate_vecs(features, sizes, use_lookup, id_max_size)
   local data = {}
   for i = 1,#features do
     table.insert(data, {})
     for j = 1,#features[i] do
       local batch_size = features[i][j]:size(1)
-      local t = torch.Tensor(batch_size, sizes[j])
-      for k = 1, batch_size do
-        t[k]:copy(id_to_embedding(features[i][j][k], sizes[j], id_max_size))
+      local t
+      if use_lookup[j] == false then
+        t = torch.Tensor(batch_size, sizes[j])
+        for k = 1, batch_size do
+          t[k]:copy(bitfield_to_vec(features[i][j][k], sizes[j], id_max_size))
+        end
+      else
+        t = torch.Tensor(batch_size)
+        for k = 1, batch_size do
+          t[k] = bitfield_to_ids(features[i][j][k], id_max_size)[1]
+        end
       end
       table.insert(data[i], t)
     end
@@ -97,21 +115,39 @@ function data:__init(opt, data_file)
   self.target_features_output = {}
   self.source_features_size = {}
   self.target_features_size = {}
+  self.source_features_vec_size = {}
+  self.target_features_vec_size = {}
+  self.source_features_use_lookup = {}
+  self.target_features_use_lookup = {}
   self.total_source_features_size = 0
   self.total_target_features_size = 0
 
   for i = 1,self.num_source_features do
     table.insert(self.source_features, f:read('source_feature_' .. i):all())
+    local max_values = f:read('source_feature_' .. i .. '_max_values'):all()[1]
     local feature_size = f:read('source_feature_' .. i .. '_size'):all()[1]
+    local use_lookup = (max_values == 1 and opt.feature_embeddings == 1)
+    table.insert(self.source_features_use_lookup, use_lookup)
     table.insert(self.source_features_size, feature_size)
+    if use_lookup == true then
+      feature_size = math.floor(feature_size * opt.feature_embeddings_dim_factor)
+    end
+    table.insert(self.source_features_vec_size, feature_size)
     self.total_source_features_size = self.total_source_features_size + feature_size
   end
   for i = 1,self.num_target_features do
     table.insert(self.target_features, f:read('target_feature_' .. i):all())
     table.insert(self.target_features_output,
       f:read('target_feature_output_' .. i):all())
+    local max_values = f:read('target_feature_' .. i .. '_max_values'):all()[1]
     local feature_size = f:read('target_feature_' .. i .. '_size'):all()[1]
+    local use_lookup = (max_values == 1 and opt.feature_embeddings == 1)
+    table.insert(self.target_features_use_lookup, use_lookup)
     table.insert(self.target_features_size, feature_size)
+    if use_lookup == true then
+      feature_size = math.floor(feature_size * opt.feature_embeddings_dim_factor)
+    end
+    table.insert(self.target_features_vec_size, feature_size)
     self.total_target_features_size = self.total_target_features_size + feature_size
   end
 
@@ -245,12 +281,15 @@ function data.__index(self, idx)
     local target_l_all = self.batches[idx][8]
     local source_features = generate_vecs(self.batches[idx][9],
                                           self.source_features_size,
+                                          self.source_features_use_lookup,
                                           self.identifier_max_size)
     local target_features = generate_vecs(self.batches[idx][10],
                                           self.target_features_size,
+                                          self.target_features_use_lookup,
                                           self.identifier_max_size)
     local target_features_output = generate_vecs(self.batches[idx][11],
                                                  self.target_features_size,
+                                                 self.target_features_use_lookup,
                                                  self.identifier_max_size)
     if opt.gpuid >= 0 then --if multi-gpu, source lives in gpuid1, rest on gpuid2
       cutorch.setDevice(opt.gpuid)

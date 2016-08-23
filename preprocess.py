@@ -379,10 +379,12 @@ def get_data(args):
         for i in range(len(src_feature_indexers)):
             f["source_feature_" + str(i+1)] = sources_features[i]
             f["source_feature_" + str(i+1) + "_size"] = np.array([len(src_feature_indexers[i].d)])
+            f["source_feature_" + str(i+1) + "_max_values"] = np.array([src_feature_indexers[i].max_num_values])
         for i in range(len(target_feature_indexers)):
             f["target_feature_" + str(i+1)] = targets_features[i]
             f["target_feature_output_" + str(i+1)] = targets_features_output[i]
             f["target_feature_" + str(i+1) + "_size"] = np.array([len(target_feature_indexers[i].d)])
+            f["target_feature_" + str(i+1) + "_max_values"] = np.array([target_feature_indexers[i].max_num_values])
         if chars == 1:
             del sources, targets, target_output
             sources_char = sources_char[source_sort]
