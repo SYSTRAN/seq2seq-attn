@@ -174,7 +174,7 @@ end
 
 function make_decoder_attn(data, opt, simple)
    -- 2D tensor target_t (batch_l x rnn_size) and
-   -- 3D tensor for context (batch_l x source_l x rnn_size +2 (if position))
+   -- 3D tensor for context (batch_l x source_l x rnn_size 
    -- 2D vector target position (batch_l x 1) (1+log j)
 
    local inputs = {}
@@ -186,7 +186,7 @@ function make_decoder_attn(data, opt, simple)
      table.insert(inputs, nn.Identity()())
      target_t=nn.JoinTable(2)({target_t, inputs[3]})
    end
-   target_t = nn.LinearNoBias(opt.rnn_size+opt.position*1, opt.rnn_size+opt.position*2)(target_t) -- batch_l x rnn_size
+   target_t = nn.LinearNoBias(opt.rnn_size+opt.position*1, opt.rnn_size)(target_t) -- batch_l x rnn_size
    simple = simple or 0
    -- get attention
 
@@ -198,15 +198,15 @@ function make_decoder_attn(data, opt, simple)
    attn = nn.Replicate(1,2)(attn) -- batch_l x  1 x source_l
    
    -- apply attention to context
-   local context_combined = nn.MM()({attn, inputs[2]}) -- batch_l x 1 x rnn_size +2 (if position)
-   context_combined = nn.Sum(2)(context_combined) -- batch_l x rnn_size +2 (if position)
+   local context_combined = nn.MM()({attn, inputs[2]}) -- batch_l x 1 x rnn_size 
+   context_combined = nn.Sum(2)(context_combined) -- batch_l x rnn_size 
    local context_output
    if simple == 0 then
-      context_combined = nn.JoinTable(2)({context_combined, inputs[1]}) -- batch_l x rnn_size*2 +2 (if position)
-      context_output = nn.Tanh()(nn.LinearNoBias(opt.rnn_size*2+opt.position*2,
-						 opt.rnn_size+opt.position*2)(context_combined))
+      context_combined = nn.JoinTable(2)({context_combined, inputs[1]}) -- batch_l x rnn_size*2 
+      context_output = nn.Tanh()(nn.LinearNoBias(opt.rnn_size*2,
+						 opt.rnn_size)(context_combined))
    else
-      context_output = nn.CAddTable()({context_combined,target_t})
+      context_output = nn.CAddTable()({context_combined,inputs[1]})
    end   
    return nn.gModule(inputs, {context_output})   
 end
