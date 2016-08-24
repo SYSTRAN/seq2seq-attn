@@ -4,53 +4,38 @@
 -- use :reuseMem() on the module to allow the feature
 -- then apply setReuse after initialization
 function nn.Module:reuseMem()
-   self.reuse = true
-   return self
+  self.reuse = true
+  return self
 end
 
 function nn.Module:setReuse()
-   if self.reuse then
-      self.gradInput = self.output
-   end
+  if self.reuse then
+    self.gradInput = self.output
+  end
+  return self
 end
 
 -- usePrealloc is based on the same principle but use pre-allocated memory at the beginning of the process
-preallocWarning={}
-preallocTable={}
+preallocWarning = {}
+preallocTable = {}
 
--- applyFor specify if applies for output (O) or gradientInput (G)
-function nn.Module:usePrealloc(preallocName, applyFor)
-   applyFor = applyFor or "GO"
-   if string.find(applyFor,"G") then
-    self.preallocGradient=preallocName
-   end
-   if string.find(applyFor,"O") then
-    self.preallocOutput=preallocName
-   end
-   return self
+function nn.Module:usePrealloc(preallocName)
+  self.prealloc = preallocName
+  return self
 end
 
 function nn.Module:setPrealloc()
-   if self.preallocOutput then
-     if preallocTable[self.preallocOutput]==nil then
-       if not(preallocWarning[self.prealloc]) then
-         print('WARNING: no prealloc memory defined for \'' .. self.prealloc .. '\'')
-         preallocWarning[self.preallocOutput]=1
-       end
-       return
-     end
-    self.output = preallocTable[self.preallocOutput]
-   end
-   if self.preallocGradient then
-     if preallocTable[self.preallocGradient]==nil then
-       if not(preallocWarning[self.prealloc]) then
-         print('WARNING: no prealloc memory defined for \'' .. self.prealloc .. '\'')
-         preallocWarning[self.preallocGradient]=1
-       end
-       return
-     end
-      self.gradInput = preallocTable[self.preallocGradient]
-   end
+  if self.prealloc then
+    if preallocTable[self.prealloc] == nil then
+      if not(preallocWarning[self.prealloc]) then
+        print('WARNING: no prealloc memory defined for \'' .. self.prealloc .. '\'')
+        preallocWarning[self.prealloc] = 1
+      end
+      return
+    end
+    self.gradInput = preallocTable[self.prealloc]
+  end
+  return self
 end
 
 -- temp is even more powerful, it provides a method to call as soon as the input/output of the object
@@ -67,15 +52,22 @@ function clearTensors(o)
   end
   if type(o) == "table" then
     for i = 1,#o do
-      o[i]=clearTensors(o[i])
+      o[i] = clearTensors(o[i])
     end
     return o
   end
   local ttype=o:type()
   if string.find(ttype,"Tensor") then
     if string.find(ttype,"Cuda") then
-      -- cutorch.setDevice(o:getDevice())
-      return torch.CudaTensor()
+      if o:getDevice() ~= 0 then
+        -- we need to allocate at least one byte, otherwise we forget on which device it is
+        -- since unallocated tensors are not attached to devices
+        cutorch.setDevice(o:getDevice())
+        return torch.CudaTensor(1)
+      else
+        -- otherwise, it was a CudaTensor without size, we don't change anything
+        return o
+      end
     else
       return torch.Tensor()
     end
@@ -85,8 +77,8 @@ end
 
 function nn.Module:cleanTemp()
   if self.isTemp then
-    self.output=clearTensors(self.output)
-    self.gradInput=clearTensors(self.gradInput)
+    self.output = clearTensors(self.output)
+    self.gradInput = clearTensors(self.gradInput)
   end
   return self
 end
