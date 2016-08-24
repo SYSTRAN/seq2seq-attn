@@ -52,3 +52,41 @@ function nn.Module:setPrealloc()
       self.gradInput = preallocTable[self.preallocGradient]
    end
 end
+
+-- temp is even more powerful, it provides a method to call as soon as the input/output of the object
+-- can be freed
+
+function nn.Module:temp()
+  self.isTemp = true
+  return self
+end
+
+function clearTensors(o)
+  if o == nil then
+    return nil
+  end
+  if type(o) == "table" then
+    for i = 1,#o do
+      o[i]=clearTensors(o[i])
+    end
+    return o
+  end
+  local ttype=o:type()
+  if string.find(ttype,"Tensor") then
+    if string.find(ttype,"Cuda") then
+      -- cutorch.setDevice(o:getDevice())
+      return torch.CudaTensor()
+    else
+      return torch.Tensor()
+    end
+  end
+  return o
+end
+
+function nn.Module:cleanTemp()
+  if self.isTemp then
+    self.output=clearTensors(self.output)
+    self.gradInput=clearTensors(self.gradInput)
+  end
+  return self
+end
