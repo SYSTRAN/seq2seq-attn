@@ -542,7 +542,7 @@ function features2featureidx(features, feature2idx, idx2feature, use_lookup, sta
   for i = 1, #features do
     table.insert(out, {})
     for j = 1, #feature2idx do
-      llocal emb = get_feature_embedding(features[i][j], feature2idx[j], #idx2feature[j], use_lookup[j])
+      local emb = get_feature_embedding(features[i][j], feature2idx[j], #idx2feature[j], use_lookup[j])
       table.insert(out[#out], emb)
     end
   end
