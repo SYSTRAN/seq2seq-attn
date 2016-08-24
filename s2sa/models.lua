@@ -1,13 +1,24 @@
 require 's2sa.util'
+require 's2sa.memory'
 
-function nn.Module:reuseMem()
-  self.reuse = true
-  return self
-end
+-- the actual pre-allocation of memory
+preallocTable={}
 
-function nn.Module:setReuse()
-  if self.reuse then
-    self.gradInput = self.output
+function preallocateMemory(opt)
+  print('Preallocating memory...')
+  preallocTable["DEC_CMMS1"]={torch.zeros(opt.max_batch_l,opt.max_sent_l_src,opt.rnn_size),torch.zeros(opt.rnn_size,opt.rnn_size,1)}
+  preallocTable["DEC_CMMS2"]={torch.zeros(opt.max_batch_l,opt.max_sent_l_src,opt.rnn_size),torch.zeros(opt.rnn_size,2,1)}
+  if opt.gpuid >= 0 then
+    for k,t in pairs(preallocTable) do
+      if opt.gpuid2 >= 0 and string.sub(k,1,"4")=="DEC_" then
+        cutorch.setDevice(opt.gpuid2)
+      else
+        cutorch.setDevice(opt.gpuid)
+      end
+      for i = 1,#t do 
+        preallocTable[k][i]=preallocTable[k][i]:cuda()
+      end
+    end
   end
 end
 
@@ -146,7 +157,7 @@ function make_decoder_attn(data, opt, simple)
   simple = simple or 0
   -- get attention
 
-  local attn = nn.MM()({context, nn.Replicate(1,3)(target_t)}) -- batch_l x source_l x 1
+  local attn = nn.MM():usePrealloc("DEC_CMMS1","G")({context, nn.Replicate(1,3)(target_t)}) -- batch_l x source_l x 1
   attn = nn.Sum(3)(attn)
   local softmax_attn = nn.SoftMax()
   softmax_attn.name = 'softmax_attn'
