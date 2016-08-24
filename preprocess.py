@@ -115,13 +115,19 @@ def get_data(args):
 
         return max_word_l, num_sents
 
-    def convert(srcfile, targetfile, batchsize, seqlength, outfile, num_sents,
+    def convert(srcfile, targetfile, alignmentfile, batchsize, seqlength, outfile, num_sents,
                 max_word_l, max_sent_l=0,chars=0, unkfilter=0, shuffle=0):
 
         newseqlength = seqlength + 2 #add 2 for EOS and BOS
         targets = np.zeros((num_sents, newseqlength), dtype=int)
         target_output = np.zeros((num_sents, newseqlength), dtype=int)
         sources = np.zeros((num_sents, newseqlength), dtype=int)
+        if len(alignmentfile) > 0:
+            alignments = np.zeros((num_sents,newseqlength,newseqlength), dtype=bool)
+            alignment_origs = open(alignmentfile, 'r')
+        else:
+            alignments = None
+            alignment_origs = None
         source_lengths = np.zeros((num_sents,), dtype=int)
         target_lengths = np.zeros((num_sents,), dtype=int)
         if chars==1:
@@ -142,6 +148,8 @@ def get_data(args):
             max_sent_l = max(len(targ), len(src), max_sent_l)
             if len(targ) > newseqlength or len(src) > newseqlength or len(targ) < 3 or len(src) < 3:
                 dropped += 1
+                if alignments is not None:
+                    alignment_orig = alignment_origs.readline()
                 continue
             targ = pad(targ, newseqlength+1, target_indexer.PAD)
             targ_char = []
@@ -182,6 +190,8 @@ def get_data(args):
                     src_unks = src_unks/(len(src)-2)
                 if targ_unks > unkfilter or src_unks > unkfilter:
                     dropped += 1
+                    if alignments is not None:
+                        alignment_orig = alignment_origs.readline()
                     continue
 
             targets[sent_id] = np.array(targ[:-1],dtype=int)
@@ -194,6 +204,16 @@ def get_data(args):
             if chars == 1:
                 sources_char[sent_id] = np.array(src_char, dtype=int)
 
+            if alignments is not None:
+                alignment_orig = alignment_origs.readline()
+                if alignment_orig == '':
+                    print("Warning: alignment file {} reached premature end at {}".format(alignmentfile, sent_id))
+                for align in alignment_orig.strip().split():
+                    aFrom, aTo = align.split('-')
+                    aFrom = int(aFrom)
+                    aTo = int(aTo)
+                    alignments[sent_id][aFrom][aTo] = True
+
             sent_id += 1
             if sent_id % 100000 == 0:
                 print("{}/{} sentences processed".format(sent_id, num_sents))
@@ -204,6 +224,8 @@ def get_data(args):
             targets = targets[rand_idx]
             target_output = target_output[rand_idx]
             sources = sources[rand_idx]
+            if alignments is not None:
+                alignments = alignments[rand_idx]
             source_lengths = source_lengths[rand_idx]
             target_lengths = target_lengths[rand_idx]
             if chars==1:
@@ -217,6 +239,8 @@ def get_data(args):
         sources = sources[source_sort]
         targets = targets[source_sort]
         target_output = target_output[source_sort]
+        if alignments is not None:
+            alignments = alignments[source_sort]
         target_l = target_lengths[source_sort]
         source_l = source_lengths[source_sort]
 
@@ -252,6 +276,8 @@ def get_data(args):
         f["source"] = sources
         f["target"] = targets
         f["target_output"] = target_output
+        if alignments is not None:
+            f["alignment"] = alignments
         f["target_l"] = np.array(target_l_max, dtype=int)
         f["target_l_all"] = target_l
         f["batch_l"] = np.array(batch_l, dtype=int)
@@ -312,10 +338,10 @@ def get_data(args):
                                                           len(target_indexer.d)))
 
     max_sent_l = 0
-    max_sent_l = convert(args.srcvalfile, args.targetvalfile, args.batchsize, args.seqlength,
+    max_sent_l = convert(args.srcvalfile, args.targetvalfile, args.alignmentvalfile, args.batchsize, args.seqlength,
                          args.outputfile + "-val.hdf5", num_sents_valid,
                          max_word_l, max_sent_l, args.chars, args.unkfilter, args.shuffle)
-    max_sent_l = convert(args.srcfile, args.targetfile, args.batchsize, args.seqlength,
+    max_sent_l = convert(args.srcfile, args.targetfile, args.alignmentfile, args.batchsize, args.seqlength,
                          args.outputfile + "-train.hdf5", num_sents_train, max_word_l,
                          max_sent_l, args.chars, args.unkfilter, args.shuffle)
 
@@ -339,8 +365,13 @@ def main(arguments):
     parser.add_argument('--targetfile', help="Path to target training data, "
                                            "where each line represents a single "
                                            "source/target sequence.", required=True)
+    parser.add_argument('--alignmentfile', help="Path to source-to-target alignment of training data, "
+                                           "where each line represents a set of alignments "
+                                           "per train instance.", required=False, default='')
     parser.add_argument('--srcvalfile', help="Path to source validation data.", required=True)
     parser.add_argument('--targetvalfile', help="Path to target validation data.", required=True)
+    parser.add_argument('--alignmentvalfile', help="Path to source-to-target alignment of validation data",
+                                           required=False, default='')
     parser.add_argument('--batchsize', help="Size of each minibatch.", type=int, default=64)
     parser.add_argument('--seqlength', help="Maximum sequence length. Sequences longer "
                                                "than this are dropped.", type=int, default=50)
