@@ -21,6 +21,7 @@ end
 function features_on_gpu(features)
   local clone = {}
   for i = 1,#features do
+    table.insert(clone, {})
     for j = 1,#features[i] do
       table.insert(clone[i], features[i][j]:cuda())
     end
@@ -250,7 +251,6 @@ function data:__init(opt, data_file)
 
     table.insert(self.batches, {target_i,
         target_output_i,
-        target_output_i:transpose(1,2),
         self.target_nonzeros[i],
         source_i,
         self.batch_l[i],
