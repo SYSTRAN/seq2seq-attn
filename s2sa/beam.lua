@@ -8,6 +8,10 @@ require 's2sa.data'
 path = require 'pl.path'
 stringx = require 'pl.stringx'
 
+if type(string.split) ~= "function" then
+  require 's2sa.string_utils'
+end
+
 local sent_id = 0
 local opt = {}
 local cmd = torch.CmdLine()
