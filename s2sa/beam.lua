@@ -599,16 +599,10 @@ function word2charidx(word, char2idx, max_word_l, t)
   return t
 end
 
-function wordidx2sent(sent, features, idx2word, idx2feature, source_str, attn, skip_end)
+function wordidx2sent(sent, features, idx2word, idx2feature, source_str, attn)
   local t = {}
-  local start_i, end_i
-  skip_end = skip_start_end or true
-  if skip_end then
-    end_i = #sent-1
-  else
-    end_i = #sent
-  end
-  for i = 2, end_i do -- skip START and END
+
+  for i = 2, #sent-1 do -- skip START and END
     local fields = {}
     if sent[i] == UNK then
       if opt.replace_unk == 1 then
@@ -896,7 +890,7 @@ function search(line)
     state, opt.beam, MAX_SENT_L, source, source_features, target, target_features)
   pred_score_total = pred_score_total + pred_score
   pred_words_total = pred_words_total + #pred - 1
-  pred_sent = wordidx2sent(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn, true)
+  pred_sent = wordidx2sent(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn)
 
   print('PRED ' .. sent_id .. ': ' .. pred_sent)
   if gold ~= nil then
@@ -912,7 +906,7 @@ function search(line)
 
   if opt.n_best > 1 and model_opt.num_target_features == 0 then
     for n = 1, opt.n_best do
-      pred_sent_n = wordidx2sent(all_sents[n], pred_features, idx2word_targ, idx2feature_targ, source_str, all_attn[n], false)
+      pred_sent_n = wordidx2sent(all_sents[n], pred_features, idx2word_targ, idx2feature_targ, source_str, all_attn[n])
       local out_n = string.format("%d ||| %s ||| %.4f", n, pred_sent_n, all_scores[n])
       print(out_n)
       nbests[n] = out_n
