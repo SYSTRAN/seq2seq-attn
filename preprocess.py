@@ -352,7 +352,7 @@ def get_data(args):
             sources = sources[rand_idx]
             source_lengths = source_lengths[rand_idx]
             target_lengths = target_lengths[rand_idx]
-            for i in range(leng(sources_features)):
+            for i in range(len(sources_features)):
                 sources_features[i] = sources_features[i][rand_idx]
                 targets_features[i] = targets_features[i][rand_idx]
                 targets_features_output[i] = targets_features_output[i][rand_idx]
