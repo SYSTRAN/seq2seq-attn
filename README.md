@@ -79,6 +79,14 @@ as the demo dataset is small. Try running on some larger datasets! For example y
 millions of parallel sentences for [translation](http://www.statmt.org/wmt15/translation-task.html)
 or [summarization](https://github.com/harvardnlp/sent-summary).
 
+
+Alternatively you can run the training with some extra features - for instance:
+
+```
+python preprocess.py --srcfile data/src-train-case.txt --targetfile data/targ-train.txt --srcvalfile data/src-val-case.txt --targetvalfile data/targ-val.txt --outputfile data/demo-mix
+th train.lua -data_file data/demo-mix-train.hdf5 -val_data_file data/demo-mix-val.hdf5 -savefile demo-model-mix
+```
+
 ### Details
 #### Preprocessing options (`preprocess.py`)
 
@@ -96,9 +104,14 @@ or zero-padded (if shorter) to `maxwordlength`.
 depending on your data size, so you may want to break up the training data into different shards.
 * `srcvocabfile, targetvocabfile`: If working with a preset vocab, then including these paths
 will ignore the `srcvocabsize,targetvocabsize`.
+* `reusefeaturefile`: If working with a preset vocab for features, then including the prefix of
+the prefix dictionary path will ignore the vocab learn from corpus
 * `unkfilter`: Ignore sentences with too many UNK tokens. Can be an absolute count limit (if > 1)
 or a proportional limit (0 < unkfilter < 1).
 * `shuffle`: Shuffle sentences.
+* `alignfile`, `alignvalfile`: when passing file with symmetrized alignment, sentences where source or
+target words matching 'alignpattern' and not aligned - are skipped.
+* `alignpattern`: regular expression to words checked in the alignment - by default '&lt;unk&gt;'
 
 #### Training options (`train.lua`)
 **Data options**
