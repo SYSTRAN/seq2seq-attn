@@ -912,7 +912,7 @@ function search(line)
 
   if opt.n_best > 1 and model_opt.num_target_features == 0 then
     for n = 1, opt.n_best do
-      pred_sent_n = wordidx2sent(all_sents[n], idx2word_targ, source_str, all_attn[n], false)
+      pred_sent_n = wordidx2sent(all_sents[n], pred_features, idx2word_targ, idx2feature_targ, source_str, all_attn[n], false)
       local out_n = string.format("%d ||| %s ||| %.4f", n, pred_sent_n, all_scores[n])
       print(out_n)
       nbests[n] = out_n
