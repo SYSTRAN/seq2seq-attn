@@ -7,7 +7,8 @@ preallocTable = {}
 function preallocateMemory(opt)
   print('Preallocating memory...')
   if opt.attn then
-    preallocTable["DEC_ATTN"]={torch.zeros(opt.max_batch_l,opt.max_sent_l_src,opt.rnn_size),torch.zeros(opt.rnn_size,opt.rnn_size,1)}
+    preallocTable["DEC_ATTN_MM1"]={GI={torch.zeros(opt.max_batch_l,opt.max_sent_l_src,opt.rnn_size),torch.zeros(opt.rnn_size,opt.rnn_size,1)}}
+    preallocTable["DEC_ATTN_MM2"]={GI={torch.zeros(opt.max_batch_l,1,opt.max_sent_l_src),torch.zeros(opt.max_batch_l,opt.max_sent_l_src,opt.rnn_size)}}
   end
   if opt.gpuid >= 0 then
     for k,t in pairs(preallocTable) do
@@ -16,8 +17,23 @@ function preallocateMemory(opt)
       else
         cutorch.setDevice(opt.gpuid)
       end
-      for i = 1,#t do 
-        preallocTable[k][i]=preallocTable[k][i]:cuda()
+      if t.GI then
+        if type(t.GI)=="table" then
+          for i = 1,#t.GI do
+            t.GI[i]=t.GI[i]:cuda()
+          end
+        else
+          t.GI=t.GI:cuda()
+        end
+      end
+      if t.O then
+        if type(t.O)=="table" then
+          for i = 1,#t.O do
+            t.O[i]=t.O[i]:cuda()
+          end
+        else
+          t.O=t.O:cuda()
+        end
       end
     end
   end
@@ -158,7 +174,7 @@ function make_decoder_attn(data, opt, simple)
   simple = simple or 0
   -- get attention
 
-  local attn = nn.MM():usePrealloc("DEC_ATTN")({context, nn.Replicate(1,3)(target_t)}) -- batch_l x source_l x 1
+  local attn = nn.MM():usePrealloc("DEC_ATTN_MM1")({context, nn.Replicate(1,3)(target_t)}) -- batch_l x source_l x 1
   attn = nn.Sum(3)(attn)
   local softmax_attn = nn.SoftMax()
   softmax_attn.name = 'softmax_attn'
@@ -166,7 +182,7 @@ function make_decoder_attn(data, opt, simple)
   attn = nn.Replicate(1,2)(attn) -- batch_l x 1 x source_l
 
   -- apply attention to context
-  local context_combined = nn.MM()({attn, context}) -- batch_l x 1 x rnn_size
+  local context_combined = nn.MM():usePrealloc("DEC_ATTN_MM2")({attn, context}) -- batch_l x 1 x rnn_size
   context_combined = nn.Sum(2)(context_combined) -- batch_l x rnn_size
   local context_output
   if simple == 0 then
