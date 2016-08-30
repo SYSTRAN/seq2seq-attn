@@ -649,7 +649,7 @@ function load_sentence(line)
   local features = {}
 
   for entry in line:gmatch'([^%s]+)' do
-    local field = entry:split('-|-')
+    local field = entry:split('%-|%-')
     local word = clean_sent(field[1])
 
     if string.len(word) > 0 then
