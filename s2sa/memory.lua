@@ -3,7 +3,7 @@
 -- reuseMem is used for reusing output tensor for storing gradInput and optimizing memory allocation
 -- use :reuseMem() on the module to allow the feature
 -- then apply setReuse after initialization
--- only applies if output and gradinput are of same type
+-- only applies if output and gradinput are of the same type
 function nn.Module:reuseMem()
   self.reuse = true
   return self
@@ -11,13 +11,13 @@ end
 
 function nn.Module:setReuse()
   if self.reuse then
-    assert(type(self.output)==type(self.gradInput), "invalid use of reuseMem")
+    assert(type(self.output) == type(self.gradInput), "invalid use of reuseMem")
     self.gradInput = self.output
   end
   return self
 end
 
--- usePrealloc is based on the same principle but use pre-allocated memory at the beginning of the process that can be share
+-- usePrealloc is based on the same principle but use pre-allocated memory at the beginning of the process that can be shared
 -- between different objects
 -- use to prellocate gradInput, or output - useful for intermediate calculations working on large input
 preallocWarning = {}

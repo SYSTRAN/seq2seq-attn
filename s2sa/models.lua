@@ -7,32 +7,42 @@ preallocTable = {}
 function preallocateMemory(opt)
   print('Preallocating memory...')
   if opt.attn then
-    preallocTable["DEC_ATTN_MM1"]={GI={torch.zeros(opt.max_batch_l,opt.max_sent_l_src,opt.rnn_size),torch.zeros(opt.rnn_size,opt.rnn_size,1)}}
-    preallocTable["DEC_ATTN_MM2"]={GI={torch.zeros(opt.max_batch_l,1,opt.max_sent_l_src),torch.zeros(opt.max_batch_l,opt.max_sent_l_src,opt.rnn_size)}}
+    preallocTable["DEC_ATTN_MM1"] = {
+      GI = {
+        torch.zeros(opt.max_batch_l, opt.max_sent_l_src, opt.rnn_size),
+        torch.zeros(opt.rnn_size, opt.rnn_size, 1)
+      }
+    }
+    preallocTable["DEC_ATTN_MM2"] = {
+      GI = {
+        torch.zeros(opt.max_batch_l, 1, opt.max_sent_l_src),
+        torch.zeros(opt.max_batch_l, opt.max_sent_l_src, opt.rnn_size)
+      }
+    }
   end
   if opt.gpuid >= 0 then
     for k,t in pairs(preallocTable) do
-      if opt.gpuid2 >= 0 and string.sub(k,1,"4")=="DEC_" then
+      if opt.gpuid2 >= 0 and string.sub(k,1,"4") == "DEC_" then
         cutorch.setDevice(opt.gpuid2)
       else
         cutorch.setDevice(opt.gpuid)
       end
       if t.GI then
-        if type(t.GI)=="table" then
+        if type(t.GI) == "table" then
           for i = 1,#t.GI do
-            t.GI[i]=t.GI[i]:cuda()
+            t.GI[i] = t.GI[i]:cuda()
           end
         else
-          t.GI=t.GI:cuda()
+          t.GI = t.GI:cuda()
         end
       end
       if t.O then
-        if type(t.O)=="table" then
+        if type(t.O) == "table" then
           for i = 1,#t.O do
-            t.O[i]=t.O[i]:cuda()
+            t.O[i] = t.O[i]:cuda()
           end
         else
-          t.O=t.O:cuda()
+          t.O = t.O:cuda()
         end
       end
     end
@@ -247,7 +257,7 @@ function make_highway(input_size, num_layers, output_size, bias, f)
         nn.Linear(input_size, output_size)(input)))
     carry_gate = nn.AddConstant(1, true)(nn.MulConstant(-1)(transform_gate))
     local proj
-    if input_size==output_size then
+    if input_size == output_size then
       proj = nn.Identity()
     else
       proj = nn.LinearNoBias(input_size, output_size)
