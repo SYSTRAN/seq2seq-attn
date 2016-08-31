@@ -249,6 +249,10 @@ intermediate models as a CPU/GPU model depending on how you specified `-gpuid`.
 If you want to run beam search on the CPU with an intermediate model trained on the GPU,
 you can use `convert_to_cpu.lua` to convert the model to CPU and run beam search.
 
+#### Getting details of a model
+To know what are the parameters used to train a model, you can use `info.lua` which displays
+the option used for the training and the perplexity scores on valid data.
+
 #### GPU memory requirements/Training speed
 Training large sequence-to-sequence models can be memory-intensive. Memory requirements will
 dependent on batch size, maximum sequence length, vocabulary size, and (obviously) model size.
