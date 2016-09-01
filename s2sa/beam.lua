@@ -180,21 +180,15 @@ local function generate_beam(initial, K, max_sent_l, source, source_features, go
   local scores = torch.FloatTensor(n, K)
   scores:zero()
   local source_l = math.min(source:size(1), opt.max_sent_l)
-  local attn_argmax = {} -- store attn weights
-  attn_argmax[1] = {}
+  local attn_argmax = {{initial}} -- store attn weights
+  local states = {{initial}} -- store predicted word idx
 
-  local states = {} -- store predicted word idx
-  states[1] = {}
-  for k = 1, 1 do
-    table.insert(states[1], initial)
-    table.insert(attn_argmax[1], initial)
-    next_ys[1][k] = State.next(initial)
-    for j = 1, model_opt.num_target_features do
-      if model_opt.target_features_lookup[j] == true then
-        next_ys_features[1][j][k] = START
-      else
-        next_ys_features[1][j][k][START] = 1
-      end
+  next_ys[1][1] = State.next(initial)
+  for j = 1, model_opt.num_target_features do
+    if model_opt.target_features_lookup[j] == true then
+      next_ys_features[1][j][1] = START
+    else
+      next_ys_features[1][j][1][START] = 1
     end
   end
 
