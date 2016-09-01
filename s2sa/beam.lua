@@ -12,7 +12,18 @@ if type(string.split) ~= "function" then
   require 's2sa.string_utils'
 end
 
-local sent_id = 0
+-- globals
+local PAD = 1
+local UNK = 2
+local START = 3
+local END = 4
+local PAD_WORD = '<blank>'
+local UNK_WORD = '<unk>'
+local START_WORD = '<s>'
+local END_WORD = '</s>'
+local START_CHAR = '{'
+local END_CHAR = '}'
+
 local opt = {}
 local cmd = torch.CmdLine()
 
@@ -494,7 +505,7 @@ function get_layer(layer)
   end
 end
 
-function sent2wordidx(sent, word2idx, start_symbol)
+function tokens2wordidx(tokens, word2idx, start_symbol)
   local t = {}
   local u = {}
   if start_symbol == 1 then
@@ -502,7 +513,7 @@ function sent2wordidx(sent, word2idx, start_symbol)
     table.insert(u, START_WORD)
   end
 
-  for word in sent:gmatch'([^%s]+)' do
+  for _,word in pairs(tokens) do
     local idx = word2idx[word] or UNK
     table.insert(t, idx)
     table.insert(u, word)
@@ -562,12 +573,13 @@ function features2featureidx(features, feature2idx, idx2feature, use_lookup, sta
   return out
 end
 
-function sent2charidx(sent, char2idx, max_word_l, start_symbol)
+function tokens2charidx(tokens, char2idx, max_word_l, start_symbol)
   local words = {}
   if start_symbol == 1 then
     table.insert(words, START_WORD)
   end
-  for word in sent:gmatch'([^%s]+)' do
+
+  for _,word in pairs(tokens) do
     table.insert(words, word)
   end
   if start_symbol == 1 then
@@ -599,22 +611,18 @@ function word2charidx(word, char2idx, max_word_l, t)
   return t
 end
 
-function wordidx2sent(sent, features, idx2word, idx2feature, source_str, attn)
+function wordidx2tokens(sent, features, idx2word, idx2feature, source_str, attn)
   local t = {}
 
   for i = 2, #sent-1 do -- skip START and END
     local fields = {}
-    if sent[i] == UNK then
-      if opt.replace_unk == 1 then
-        local s = source_str[attn[i]]
-        if phrase_table[s] ~= nil then
-          print(s .. ':' ..phrase_table[s])
-        end
-        local r = phrase_table[s] or s
-        table.insert(fields, r)
-      else
-        table.insert(fields, idx2word[sent[i]])
+    if sent[i] == UNK and opt.replace_unk == 1 then
+      local s = source_str[attn[i]]
+      if phrase_table[s] ~= nil then
+        print(s .. ':' ..phrase_table[s])
       end
+      local r = phrase_table[s] or s
+      table.insert(fields, r)
     else
       table.insert(fields, idx2word[sent[i]])
     end
@@ -628,7 +636,7 @@ function wordidx2sent(sent, features, idx2word, idx2feature, source_str, attn)
     end
     table.insert(t, table.concat(fields, '-|-'))
   end
-  return table.concat(t, ' ')
+  return t
 end
 
 function clean_sent(sent)
@@ -644,20 +652,15 @@ function strip(s)
   return s:gsub("^%s+",""):gsub("%s+$","")
 end
 
-function load_sentence(line)
-  local sent = ''
+function extract_features(tokens)
+  local cleaned_tokens = {}
   local features = {}
 
-  for entry in line:gmatch'([^%s]+)' do
+  for _, entry in pairs(tokens) do
     local field = entry:split('%-|%-')
     local word = clean_sent(field[1])
-
     if string.len(word) > 0 then
-      if string.len(sent) == 0 then
-        sent = word
-      else
-        sent = sent .. ' ' .. word
-      end
+     table.insert(cleaned_tokens, word)
 
       if #field > 1 then
         table.insert(features, {})
@@ -669,7 +672,8 @@ function load_sentence(line)
       end
     end
   end
-  return sent, features
+
+  return cleaned_tokens, features
 end
 
 function buildAbsolutePaths(resourcesDir)
@@ -705,12 +709,6 @@ end
 function init(arg, resourcesDir)
   -- parse input params
   opt = cmd:parse(arg)
-
-  -- some globals
-  PAD = 1; UNK = 2; START = 3; END = 4
-  PAD_WORD = '<blank>'; UNK_WORD = '<unk>'; START_WORD = '<s>'; END_WORD = '</s>'
-  START_CHAR = '{'; END_CHAR = '}'
-  MAX_SENT_L = opt.max_sent_l
 
    buildAbsolutePaths(resourcesDir)
   assert(path.exists(opt.model), 'model does not exist')
@@ -793,17 +791,6 @@ function init(arg, resourcesDir)
         model_opt.max_word_l, word2charidx_targ[i])
     end
   end
-  -- load gold labels if it exists
-  if path.exists(opt.targ_file) then
-    print('loading GOLD labels at ' .. opt.targ_file)
-    gold = {}
-    local file = io.open(opt.targ_file, 'r')
-    for line in file:lines() do
-      table.insert(gold, line)
-    end
-  else
-    opt.score_gold = 0
-  end
 
   if opt.gpuid >= 0 then
     cutorch.setDevice(opt.gpuid)
@@ -825,10 +812,10 @@ function init(arg, resourcesDir)
   if model_opt.attn == 1 then
     decoder_attn:apply(get_layer)
     decoder_softmax = softmax_layers[1]
-    attn_layer = torch.zeros(opt.beam, MAX_SENT_L)
+    attn_layer = torch.zeros(opt.beam, opt.max_sent_l)
   end
 
-  context_proto = torch.zeros(1, MAX_SENT_L, model_opt.rnn_size)
+  context_proto = torch.zeros(1, opt.max_sent_l, model_opt.rnn_size)
   local h_init_dec = torch.zeros(opt.beam, model_opt.rnn_size)
   local h_init_enc = torch.zeros(1, model_opt.rnn_size)
   if opt.gpuid >= 0 then
@@ -839,7 +826,7 @@ function init(arg, resourcesDir)
       cutorch.setDevice(opt.gpuid)
       context_proto = context_proto:cuda()
       cutorch.setDevice(opt.gpuid2)
-      context_proto2 = torch.zeros(opt.beam, MAX_SENT_L, model_opt.rnn_size):cuda()
+      context_proto2 = torch.zeros(opt.beam, opt.max_sent_l, model_opt.rnn_size):cuda()
     else
       context_proto = context_proto:cuda()
     end
@@ -860,70 +847,58 @@ function init(arg, resourcesDir)
     table.insert(init_fwd_dec, h_init_dec:clone()) -- hidden state
   end
 
-  pred_score_total = 0
-  gold_score_total = 0
-  pred_words_total = 0
-  gold_words_total = 0
-
   State = StateAll
-  sent_id = 0
 end
 
-function search(line)
-  sent_id = sent_id + 1
-  print('SENT ' .. sent_id .. ': ' ..line)
-  line, source_features_str = load_sentence(line)
+function search(tokens, gold)
+  cleaned_tokens, source_features_str = extract_features(tokens)
   local source, source_str
   local source_features = features2featureidx(source_features_str, feature2idx_src, idx2feature_src, model_opt.source_features_lookup, model_opt.start_symbol)
   if model_opt.use_chars_enc == 0 then
-    source, source_str = sent2wordidx(line, word2idx_src, model_opt.start_symbol)
+    source, source_str = tokens2wordidx(cleaned_tokens, word2idx_src, model_opt.start_symbol)
   else
-    source, source_str = sent2charidx(line, char2idx, model_opt.max_word_l, model_opt.start_symbol)
+    source, source_str = tokens2charidx(cleaned_tokens, char2idx, model_opt.max_word_l, model_opt.start_symbol)
   end
-  if opt.score_gold == 1 then
-    gold_line, target_features_str = load_sentence(gold[sent_id])
-    target, target_str = sent2wordidx(gold_line, word2idx_targ, 1)
+
+  if gold ~= nil then
+    gold_tokens, target_features_str = extract_features(gold)
+    target, target_str = tokens2wordidx(gold_tokens, word2idx_targ, 1)
     target_features = features2featureidx(target_features_str, feature2idx_targ, idx2feature_targ, model_opt.target_features_lookup, 1)
   end
+
   state = State.initial(START)
+
   pred, pred_features, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(model,
-    state, opt.beam, MAX_SENT_L, source, source_features, target, target_features)
-  pred_score_total = pred_score_total + pred_score
-  pred_words_total = pred_words_total + #pred - 1
-  pred_sent = wordidx2sent(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn)
+    state, opt.beam, opt.max_sent_l, source, source_features, target, target_features)
 
-  print('PRED ' .. sent_id .. ': ' .. pred_sent)
+  local pred_tokens = wordidx2tokens(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn)
+
+  local info = {
+    nbests = {},
+    pred_score = pred_score,
+    pred_words = #pred - 1
+  }
+
   if gold ~= nil then
-    print('GOLD ' .. sent_id .. ': ' .. gold[sent_id])
-    if opt.score_gold == 1 then
-      print(string.format("PRED SCORE: %.4f, GOLD SCORE: %.4f", pred_score, gold_score))
-      gold_score_total = gold_score_total + gold_score
-      gold_words_total = gold_words_total + target:size(1) - 1
-    end
+    info.gold_score = gold_score
+    info.gold_words = target:size(1) - 1
   end
-
-  nbests = {}
 
   if opt.n_best > 1 and model_opt.num_target_features == 0 then
     for n = 1, opt.n_best do
-      pred_sent_n = wordidx2sent(all_sents[n], pred_features, idx2word_targ, idx2feature_targ, source_str, all_attn[n])
-      local out_n = string.format("%d ||| %s ||| %.4f", n, pred_sent_n, all_scores[n])
-      print(out_n)
-      nbests[n] = out_n
+      local pred_tokens_n = wordidx2tokens(all_sents[n], pred_features, idx2word_targ, idx2feature_targ, source_str, all_attn[n])
+      table.insert(info.nbests, {
+        tokens = pred_tokens_n,
+        score = all_scores[n]
+      })
     end
   end
 
-  print('')
-
-  return pred_sent, nbests
-end
-
-function getOptions()
-  return opt
+  return pred_tokens, info
 end
 
 return {
   init = init,
   search = search,
-  getOptions = getOptions
+  getOptions = function() return opt end
 }

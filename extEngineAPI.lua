@@ -4,6 +4,6 @@ function init(arg, resourcesDir)
   beam.init(arg, resourcesDir)
 end
 
-function translate(input)
-  return beam.search(input)
+function translate(tokens)
+  return beam.search(tokens)
 end
