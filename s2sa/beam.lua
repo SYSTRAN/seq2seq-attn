@@ -371,8 +371,7 @@ local function generate_beam(initial, K, max_sent_l, source, source_features, go
 
         if i < 2 or diff then
           if model_opt.attn == 1 then
-            local _, max_index = decoder_softmax.output[prev_k]:max(1)
-            attn_argmax[i][k] = State.advance(attn_argmax[i-1][prev_k],max_index[1])
+            attn_argmax[i][k] = State.advance(attn_argmax[i-1][prev_k], decoder_softmax.output[prev_k]:clone())
           end
           prev_ks[i][k] = prev_k
           next_ys[i][k] = y_i
@@ -638,15 +637,25 @@ local function tokens2charidx(tokens, chars_idx, max_word_l, start_symbol)
   return chars, words
 end
 
+local function token_with_max_attention(tokens, attn)
+  local _, max_index = attn:max(1)
+
+  local token
+  if max_index[1] then
+    token = tokens[max_index[1]]
+  end
+  return token
+end
+
 local function wordidx2tokens(sent, features, idx2word, idx2feature, source_str, attn)
   local t = {}
 
   for i = 2, #sent-1 do -- skip START and END
     local fields = {}
     if sent[i] == UNK and opt.replace_unk == 1 then
-      local s = source_str[attn[i]]
+      local s = token_with_max_attention(source_str, attn[i])
       if phrase_table[s] ~= nil then
-        print(s .. ':' ..phrase_table[s])
+        print('Unknown token "' .. s .. '" replaced by source token "' ..phrase_table[s] .. '"')
       end
       local r = phrase_table[s] or s
       table.insert(fields, r)
@@ -906,6 +915,7 @@ local function search(tokens, gold)
 
   local info = {
     nbests = {},
+    attention = attn,
     pred_score = pred_score,
     pred_words = #pred - 1
   }
