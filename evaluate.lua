@@ -1,6 +1,7 @@
 local beam = require 's2sa.beam'
+local path = require 'pl.path'
 
-function sent2tokens(line)
+local function sent2tokens(line)
   local tokens = {}
   for tok in line:gmatch'([^%s]+)' do
     table.insert(tokens, tok)
@@ -8,7 +9,7 @@ function sent2tokens(line)
   return tokens
 end
 
-function main()
+local function main()
   beam.init(arg)
   local opt = beam.getOptions()
 
@@ -28,8 +29,8 @@ function main()
   if path.exists(opt.targ_file) then
     print('loading GOLD labels at ' .. opt.targ_file)
 
-    local file = io.open(opt.targ_file, 'r')
-    for line in file:lines() do
+    local targ_file = io.open(opt.targ_file, 'r')
+    for line in targ_file:lines() do
       table.insert(gold, sent2tokens(line))
     end
   else
@@ -59,7 +60,7 @@ function main()
     end
 
     for n = 1, #info.nbests do
-      local out_n = string.format("%d ||| %s ||| %.4f", n, table.concat(nbests[n].tokens, ' '), nbests[n].score)
+      local out_n = string.format("%d ||| %s ||| %.4f", n, table.concat(info.nbests[n].tokens, ' '), info.nbests[n].score)
       print(out_n)
       out_file:write(info.nbests[n] .. '\n')
     end

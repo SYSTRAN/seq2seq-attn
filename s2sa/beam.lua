@@ -5,8 +5,9 @@ require 'nngraph'
 require 's2sa.models'
 require 's2sa.data'
 
-path = require 'pl.path'
-stringx = require 'pl.stringx'
+local path = require 'pl.path'
+local stringx = require 'pl.stringx'
+local utf8 --loaded when using character models only
 
 if type(string.split) ~= "function" then
   require 's2sa.string_utils'
@@ -17,12 +18,35 @@ local PAD = 1
 local UNK = 2
 local START = 3
 local END = 4
-local PAD_WORD = '<blank>'
 local UNK_WORD = '<unk>'
 local START_WORD = '<s>'
 local END_WORD = '</s>'
 local START_CHAR = '{'
 local END_CHAR = '}'
+local State
+local model
+local model_opt
+local idx2feature_src = {}
+local feature2idx_src = {}
+local idx2feature_targ = {}
+local feature2idx_targ = {}
+local word2charidx_targ
+local init_fwd_enc = {}
+local init_fwd_dec = {}
+local idx2word_src
+local word2idx_src
+local idx2word_targ
+local word2idx_targ
+local context_proto
+local context_proto2
+local decoder_softmax
+local decoder_attn
+local phrase_table
+local word_vecs_enc
+local word_vecs_dec
+local softmax_layers
+local hop_attn
+local char2idx
 
 local opt = {}
 local cmd = torch.CmdLine()
@@ -57,21 +81,21 @@ cmd:option('-gpuid', -1, [[ID of the GPU to use (-1 = use CPU)]])
 cmd:option('-gpuid2', -1, [[Second GPU ID]])
 cmd:option('-cudnn', 0, [[If using character model, this should be = 1 if the character model was trained using cudnn]])
 
-function copy(orig)
+local function copy(orig)
   local orig_type = type(orig)
-  local copy
+  local copy_obj
   if orig_type == 'table' then
-    copy = {}
+    copy_obj = {}
     for orig_key, orig_value in pairs(orig) do
-      copy[orig_key] = orig_value
+      copy_obj[orig_key] = orig_value
     end
   else
-    copy = orig
+    copy_obj = orig
   end
-  return copy
+  return copy_obj
 end
 
-function append_table(dst, src)
+local function append_table(dst, src)
   for i = 1, #src do
     table.insert(dst, src[i])
   end
@@ -109,7 +133,7 @@ function StateAll.next(state)
   return state[#state]
 end
 
-function StateAll.heuristic(state)
+function StateAll.heuristic()
   return 0
 end
 
@@ -121,12 +145,12 @@ function StateAll.print(state)
 end
 
 -- Convert a flat index to a row-column tuple.
-function flat_to_rc(v, flat_index)
+local function flat_to_rc(v, flat_index)
   local row = math.floor((flat_index - 1) / v:size(2)) + 1
   return row, (flat_index - 1) % v:size(2) + 1
 end
 
-function generate_beam(model, initial, K, max_sent_l, source, source_features, gold, gold_features)
+local function generate_beam(initial, K, max_sent_l, source, source_features, gold, gold_features)
   --reset decoder initial states
   if opt.gpuid >= 0 and opt.gpuid2 >= 0 then
     cutorch.setDevice(opt.gpuid)
@@ -177,7 +201,7 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
   local max_hyp_feats = {}
   if model_opt.num_target_features > 0 then
     table.insert(max_hyp_feats, {})
-    for j = 1, model_opt.num_target_features do
+    for _ = 1, model_opt.num_target_features do
       table.insert(max_hyp_feats[1], {START})
     end
   end
@@ -205,7 +229,7 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
     rnn_state_enc = out
     context[{{},t}]:copy(out[#out])
   end
-  rnn_state_dec = {}
+  local rnn_state_dec = {}
   for i = 1, #init_fwd_dec do
     table.insert(rnn_state_dec, init_fwd_dec[i]:zero())
   end
@@ -242,6 +266,8 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
       end
     end
   end
+
+  local rnn_state_dec_gold
   if opt.score_gold == 1 then
     rnn_state_dec_gold = {}
     for i = 1, #rnn_state_dec do
@@ -258,12 +284,18 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
     context = context2
   end
 
-  out_float = torch.FloatTensor()
+  local out_float = torch.FloatTensor()
 
   local i = 1
   local done = false
   local max_score = -1e9
   local found_eos = false
+  local end_attn_argmax
+  local end_hyp
+  local end_score
+  local max_hyp
+  local max_attn_argmax
+
   while (not done) and (i < n) do
     i = i+1
     states[i] = {}
@@ -333,7 +365,7 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
     for k = 1, K do
       while true do
         local score, index = flat_out:max(1)
-        local score = score[1]
+        score = score[1]
         local prev_k, y_i = flat_to_rc(out_float, index[1])
         states[i][k] = State.advance(states[i-1][prev_k], y_i)
         local diff = true
@@ -345,7 +377,7 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
 
         if i < 2 or diff then
           if model_opt.attn == 1 then
-            max_attn, max_index = decoder_softmax.output[prev_k]:max(1)
+            local _, max_index = decoder_softmax.output[prev_k]:max(1)
             attn_argmax[i][k] = State.advance(attn_argmax[i-1][prev_k],max_index[1])
           end
           prev_ks[i][k] = prev_k
@@ -361,6 +393,7 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
       rnn_state_dec[j]:copy(rnn_state_dec[j]:index(1, prev_ks[i]))
     end
 
+    local pred_feats
     if model_opt.num_target_features > 0 then
       pred_feats = {}
       for k = 1, K do
@@ -392,7 +425,7 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
     if end_hyp[#end_hyp] == END then
       if model_opt.num_target_features > 0 then
         table.insert(max_hyp_feats, {})
-        for j = 1, model_opt.num_target_features do
+        for _ = 1, model_opt.num_target_features do
           table.insert(max_hyp_feats[#max_hyp_feats], {END})
         end
       end
@@ -423,8 +456,8 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
   local gold_score = 0
   if opt.score_gold == 1 then
     rnn_state_dec = {}
-    for i = 1, #init_fwd_dec do
-      table.insert(rnn_state_dec, init_fwd_dec[i][{{1}}]:zero())
+    for fwd_i = 1, #init_fwd_dec do
+      table.insert(rnn_state_dec, init_fwd_dec[fwd_i][{{1}}]:zero())
     end
     if model_opt.init_dec == 1 then
       rnn_state_dec = rnn_state_dec_gold
@@ -468,7 +501,7 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
   return max_hyp, max_hyp_feats, max_score, max_attn_argmax, gold_score, states[i], scores[i], attn_argmax[i]
 end
 
-function idx2key(file)
+local function idx2key(file)
   local f = io.open(file,'r')
   local t = {}
   for line in f:lines() do
@@ -481,7 +514,7 @@ function idx2key(file)
   return t
 end
 
-function flip_table(u)
+local function flip_table(u)
   local t = {}
   for key, value in pairs(u) do
     t[value] = key
@@ -489,7 +522,7 @@ function flip_table(u)
   return t
 end
 
-function get_layer(layer)
+local function get_layer(layer)
   if layer.name ~= nil then
     if layer.name == 'decoder_attn' then
       decoder_attn = layer
@@ -505,7 +538,7 @@ function get_layer(layer)
   end
 end
 
-function tokens2wordidx(tokens, word2idx, start_symbol)
+local function tokens2wordidx(tokens, word2idx, start_symbol)
   local t = {}
   local u = {}
   if start_symbol == 1 then
@@ -525,14 +558,14 @@ function tokens2wordidx(tokens, word2idx, start_symbol)
   return torch.LongTensor(t), u
 end
 
-function get_feature_embedding(values, feature2idx, vocab_size, use_lookup)
+local function get_feature_embedding(values, feature2idx, vocab_size, use_lookup)
   if use_lookup == true then
     local t = torch.Tensor(1)
     t[1] = feature2idx[values[1]]
     return t
   else
     local emb = {}
-    for i = 1, vocab_size do
+    for _ = 1, vocab_size do
       table.insert(emb, 0)
     end
     for i = 1, #values do
@@ -543,7 +576,7 @@ function get_feature_embedding(values, feature2idx, vocab_size, use_lookup)
   end
 end
 
-function features2featureidx(features, feature2idx, idx2feature, use_lookup, start_symbol)
+local function features2featureidx(features, feature2idx, idx2feature, use_lookup, start_symbol)
   local out = {}
 
   if start_symbol == 1 then
@@ -573,31 +606,12 @@ function features2featureidx(features, feature2idx, idx2feature, use_lookup, sta
   return out
 end
 
-function tokens2charidx(tokens, char2idx, max_word_l, start_symbol)
-  local words = {}
-  if start_symbol == 1 then
-    table.insert(words, START_WORD)
-  end
-
-  for _,word in pairs(tokens) do
-    table.insert(words, word)
-  end
-  if start_symbol == 1 then
-    table.insert(words, END_WORD)
-  end
-  local chars = torch.ones(#words, max_word_l)
-  for i = 1, #words do
-    chars[i] = word2charidx(words[i], char2idx, max_word_l, chars[i])
-  end
-  return chars, words
-end
-
-function word2charidx(word, char2idx, max_word_l, t)
+local function word2charidx(word, chars_idx, max_word_l, t)
   t[1] = START
   local i = 2
   for _, char in utf8.next, word do
     char = utf8.char(char)
-    local char_idx = char2idx[char] or UNK
+    local char_idx = chars_idx[char] or UNK
     t[i] = char_idx
     i = i+1
     if i >= max_word_l then
@@ -611,7 +625,26 @@ function word2charidx(word, char2idx, max_word_l, t)
   return t
 end
 
-function wordidx2tokens(sent, features, idx2word, idx2feature, source_str, attn)
+local function tokens2charidx(tokens, chars_idx, max_word_l, start_symbol)
+  local words = {}
+  if start_symbol == 1 then
+    table.insert(words, START_WORD)
+  end
+
+  for _,word in pairs(tokens) do
+    table.insert(words, word)
+  end
+  if start_symbol == 1 then
+    table.insert(words, END_WORD)
+  end
+  local chars = torch.ones(#words, max_word_l)
+  for i = 1, #words do
+    chars[i] = word2charidx(words[i], chars_idx, max_word_l, chars[i])
+  end
+  return chars, words
+end
+
+local function wordidx2tokens(sent, features, idx2word, idx2feature, source_str, attn)
   local t = {}
 
   for i = 2, #sent-1 do -- skip START and END
@@ -639,7 +672,7 @@ function wordidx2tokens(sent, features, idx2word, idx2feature, source_str, attn)
   return t
 end
 
-function clean_sent(sent)
+local function clean_sent(sent)
   local s = stringx.replace(sent, UNK_WORD, '')
   s = stringx.replace(s, START_WORD, '')
   s = stringx.replace(s, END_WORD, '')
@@ -648,11 +681,11 @@ function clean_sent(sent)
   return s
 end
 
-function strip(s)
+local function strip(s)
   return s:gsub("^%s+",""):gsub("%s+$","")
 end
 
-function extract_features(tokens)
+local function extract_features(tokens)
   local cleaned_tokens = {}
   local features = {}
 
@@ -676,7 +709,7 @@ function extract_features(tokens)
   return cleaned_tokens, features
 end
 
-function buildAbsolutePaths(resourcesDir)
+local function build_absolute_paths(resourcesDir)
   local function isempty(s)
     return s == nil or s == ''
   end
@@ -706,11 +739,11 @@ function buildAbsolutePaths(resourcesDir)
   end
 end
 
-function init(arg, resourcesDir)
+local function init(arg, resourcesDir)
   -- parse input params
   opt = cmd:parse(arg)
 
-   buildAbsolutePaths(resourcesDir)
+  build_absolute_paths(resourcesDir)
   assert(path.exists(opt.model), 'model does not exist')
 
   if opt.gpuid >= 0 then
@@ -721,7 +754,7 @@ function init(arg, resourcesDir)
     end
   end
   print('loading ' .. opt.model .. '...')
-  checkpoint = torch.load(opt.model)
+  local checkpoint = torch.load(opt.model)
   print('done!')
 
   if opt.replace_unk == 1 then
@@ -750,11 +783,11 @@ function init(arg, resourcesDir)
 
   if model_opt.source_features_lookup == nil then
     model_opt.source_features_lookup = {}
-    for i = 1, model_opt.num_source_features do
+    for _ = 1, model_opt.num_source_features do
       table.insert(model_opt.source_features_lookup, false)
     end
     model_opt.target_features_lookup = {}
-    for i = 1, model_opt.num_target_features do
+    for _ = 1, model_opt.num_target_features do
       table.insert(model_opt.target_features_lookup, false)
     end
   end
@@ -783,12 +816,13 @@ function init(arg, resourcesDir)
     utf8 = require 'lua-utf8'
     char2idx = flip_table(idx2key(opt.char_dict))
     model[1]:apply(get_layer)
-  end
-  if model_opt.use_chars_dec == 1 then
-    word2charidx_targ = torch.LongTensor(#idx2word_targ, model_opt.max_word_l):fill(PAD)
-    for i = 1, #idx2word_targ do
-      word2charidx_targ[i] = word2charidx(idx2word_targ[i], char2idx,
-        model_opt.max_word_l, word2charidx_targ[i])
+
+    if model_opt.use_chars_dec == 1 then
+      word2charidx_targ = torch.LongTensor(#idx2word_targ, model_opt.max_word_l):fill(PAD)
+      for i = 1, #idx2word_targ do
+        word2charidx_targ[i] = word2charidx(idx2word_targ[i], char2idx,
+          model_opt.max_word_l, word2charidx_targ[i])
+      end
     end
   end
 
@@ -809,6 +843,7 @@ function init(arg, resourcesDir)
 
   softmax_layers = {}
   model[2]:apply(get_layer)
+  local attn_layer
   if model_opt.attn == 1 then
     decoder_attn:apply(get_layer)
     decoder_softmax = softmax_layers[1]
@@ -831,16 +866,16 @@ function init(arg, resourcesDir)
       context_proto = context_proto:cuda()
     end
     if model_opt.attn == 1 then
-      attn_layer = attn_layer:cuda()
+      attn_layer:cuda()
     end
   end
   init_fwd_enc = {}
-  init_fwd_dec = {} -- initial context
+  init_fwd_dec = {}
   if model_opt.input_feed == 1 then
     table.insert(init_fwd_dec, h_init_dec:clone())
   end
 
-  for L = 1, model_opt.num_layers do
+  for _ = 1, model_opt.num_layers do
     table.insert(init_fwd_enc, h_init_enc:clone())
     table.insert(init_fwd_enc, h_init_enc:clone())
     table.insert(init_fwd_dec, h_init_dec:clone()) -- memory cell
@@ -850,8 +885,8 @@ function init(arg, resourcesDir)
   State = StateAll
 end
 
-function search(tokens, gold)
-  cleaned_tokens, source_features_str = extract_features(tokens)
+local function search(tokens, gold)
+  local cleaned_tokens, source_features_str = extract_features(tokens)
   local source, source_str
   local source_features = features2featureidx(source_features_str, feature2idx_src, idx2feature_src, model_opt.source_features_lookup, model_opt.start_symbol)
   if model_opt.use_chars_enc == 0 then
@@ -860,15 +895,17 @@ function search(tokens, gold)
     source, source_str = tokens2charidx(cleaned_tokens, char2idx, model_opt.max_word_l, model_opt.start_symbol)
   end
 
+  local target
+  local target_features
   if gold ~= nil then
-    gold_tokens, target_features_str = extract_features(gold)
-    target, target_str = tokens2wordidx(gold_tokens, word2idx_targ, 1)
+    local gold_tokens, target_features_str = extract_features(gold)
+    target = tokens2wordidx(gold_tokens, word2idx_targ, 1)
     target_features = features2featureidx(target_features_str, feature2idx_targ, idx2feature_targ, model_opt.target_features_lookup, 1)
   end
 
-  state = State.initial(START)
+  local state = State.initial(START)
 
-  pred, pred_features, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(model,
+  local pred, pred_features, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(
     state, opt.beam, opt.max_sent_l, source, source_features, target, target_features)
 
   local pred_tokens = wordidx2tokens(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn)
