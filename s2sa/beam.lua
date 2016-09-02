@@ -649,8 +649,9 @@ local function token_with_max_attention(tokens, attn)
   return token
 end
 
-local function wordidx2tokens(sent, features, idx2word, idx2feature, source_str, attn)
-  local t = {}
+local function wordidx2annotations(sent, features, idx2word, idx2feature, source_str, attn)
+  local annotations = {}
+  local pos = 0
 
   for i = 2, #sent-1 do -- skip START and END
     local fields = {}
@@ -672,9 +673,19 @@ local function wordidx2tokens(sent, features, idx2word, idx2feature, source_str,
       local values_str = table.concat(values, ',')
       table.insert(fields, values_str)
     end
-    table.insert(t, table.concat(fields, '-|-'))
+
+    local token = table.concat(fields, '-|-')
+    table.insert(annotations, {
+      value = token,
+      range = {
+        begin = pos,
+        ['end'] = pos + string.len(token)
+      },
+      attention = attn[i]
+    })
+    pos = pos + string.len(token) + 1
   end
-  return t
+  return annotations
 end
 
 local function clean_sent(sent)
@@ -911,11 +922,10 @@ local function search(tokens, gold)
   local pred, pred_features, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(
     opt.beam, opt.max_sent_l, source, source_features, target, target_features)
 
-  local pred_tokens = wordidx2tokens(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn)
+  local pred_annotations = wordidx2annotations(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn)
 
   local info = {
     nbests = {},
-    attention = attn,
     pred_score = pred_score,
     pred_words = #pred - 1
   }
@@ -927,15 +937,15 @@ local function search(tokens, gold)
 
   if opt.n_best > 1 and model_opt.num_target_features == 0 then
     for n = 1, opt.n_best do
-      local pred_tokens_n = wordidx2tokens(all_sents[n], pred_features, idx2word_targ, idx2feature_targ, source_str, all_attn[n])
+      local pred_annotations_n = wordidx2annotations(all_sents[n], pred_features, idx2word_targ, idx2feature_targ, source_str, all_attn[n])
       table.insert(info.nbests, {
-        tokens = pred_tokens_n,
+        annotations = pred_annotations_n,
         score = all_scores[n]
       })
     end
   end
 
-  return pred_tokens, info
+  return pred_annotations, info
 end
 
 return {

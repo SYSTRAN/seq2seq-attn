@@ -9,6 +9,15 @@ local function sent2tokens(line)
   return tokens
 end
 
+local function annotations2sent(annotations)
+  local tokens = {}
+  for _, annotation in pairs(annotations) do
+    table.insert(tokens, annotation.value)
+  end
+
+  return table.concat(tokens, ' ')
+end
+
 local function main()
   beam.init(arg)
   local opt = beam.getOptions()
@@ -45,8 +54,8 @@ local function main()
       print('GOLD ' .. sent_id .. ': ' .. table.concat(gold[sent_id], ' '))
     end
 
-    local pred_tokens, info = beam.search(sent2tokens(line), gold[sent_id])
-    local sent = table.concat(pred_tokens, ' ')
+    local annotations, info = beam.search(sent2tokens(line), gold[sent_id])
+    local sent = annotations2sent(annotations)
     print('PRED ' .. sent_id .. ': '..sent)
     out_file:write(sent .. '\n')
 
@@ -60,9 +69,10 @@ local function main()
     end
 
     for n = 1, #info.nbests do
-      local out_n = string.format("%d ||| %s ||| %.4f", n, table.concat(info.nbests[n].tokens, ' '), info.nbests[n].score)
+      local nbest = annotations2sent(info.nbests[n].annotations)
+      local out_n = string.format("%d ||| %s ||| %.4f", n, nbest, info.nbests[n].score)
       print(out_n)
-      out_file:write(info.nbests[n] .. '\n')
+      out_file:write(nbest .. '\n')
     end
 
     print('')
