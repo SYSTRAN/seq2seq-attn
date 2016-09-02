@@ -20,6 +20,7 @@ function preallocateMemory(opt)
       }
     }
   end
+  -- move on GPU according to gpuid, gpuid2 settings
   if opt.gpuid >= 0 then
     for k,t in pairs(preallocTable) do
       if opt.gpuid2 >= 0 and string.sub(k,1,"4") == "DEC_" then

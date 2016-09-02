@@ -906,6 +906,7 @@ function main()
     _, criterion = make_generator(valid_data, opt)
   end
 
+  -- call memory pre-allocation
   preallocateMemory(opt)
 
   layers = {encoder, decoder, generator}
