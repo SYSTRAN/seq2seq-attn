@@ -150,8 +150,10 @@ local function flat_to_rc(v, flat_index)
   return row, (flat_index - 1) % v:size(2) + 1
 end
 
-local function generate_beam(initial, K, max_sent_l, source, source_features, gold, gold_features)
+local function generate_beam(K, max_sent_l, source, source_features, gold, gold_features)
   --reset decoder initial states
+  local initial = State.initial(START)
+
   if opt.gpuid >= 0 and opt.gpuid2 >= 0 then
     cutorch.setDevice(opt.gpuid)
   end
@@ -906,10 +908,8 @@ local function search(tokens, gold)
     target_features = features2featureidx(target_features_str, feature2idx_targ, idx2feature_targ, model_opt.target_features_lookup, 1)
   end
 
-  local state = State.initial(START)
-
   local pred, pred_features, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(
-    state, opt.beam, opt.max_sent_l, source, source_features, target, target_features)
+    opt.beam, opt.max_sent_l, source, source_features, target, target_features)
 
   local pred_tokens = wordidx2tokens(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn)
 
