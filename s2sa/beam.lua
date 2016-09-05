@@ -541,10 +541,10 @@ local function tokens2wordidx(tokens, word2idx, start_symbol)
     table.insert(u, START_WORD)
   end
 
-  for _,word in pairs(tokens) do
-    local idx = word2idx[word] or UNK
+  for _, token in pairs(tokens) do
+    local idx = word2idx[token.value] or UNK
     table.insert(t, idx)
-    table.insert(u, word)
+    table.insert(u, token.value)
   end
   if start_symbol == 1 then
     table.insert(t, END)
@@ -626,8 +626,8 @@ local function tokens2charidx(tokens, chars_idx, max_word_l, start_symbol)
     table.insert(words, START_WORD)
   end
 
-  for _,word in pairs(tokens) do
-    table.insert(words, word)
+  for _, token in pairs(tokens) do
+    table.insert(words, token.value)
   end
   if start_symbol == 1 then
     table.insert(words, END_WORD)
@@ -639,24 +639,24 @@ local function tokens2charidx(tokens, chars_idx, max_word_l, start_symbol)
   return chars, words
 end
 
-local function token_with_max_attention(tokens, attn)
+local function word_with_max_attention(words, attn)
   local _, max_index = attn:max(1)
 
-  local token
+  local word
   if max_index[1] then
-    token = tokens[max_index[1]]
+    word = words[max_index[1]]
   end
-  return token
+  return word
 end
 
-local function wordidx2annotations(sent, features, idx2word, idx2feature, source_str, attn)
-  local annotations = {}
+local function wordidx2tokens(sent, features, idx2word, idx2feature, source_words, attn)
+  local tokens = {}
   local pos = 0
 
   for i = 2, #sent-1 do -- skip START and END
     local fields = {}
     if sent[i] == UNK and opt.replace_unk == 1 then
-      local s = token_with_max_attention(source_str, attn[i])
+      local s = word_with_max_attention(source_words, attn[i])
       if phrase_table[s] ~= nil then
         print('Unknown token "' .. s .. '" replaced by source token "' ..phrase_table[s] .. '"')
       end
@@ -674,18 +674,19 @@ local function wordidx2annotations(sent, features, idx2word, idx2feature, source
       table.insert(fields, values_str)
     end
 
-    local token = table.concat(fields, '-|-')
-    table.insert(annotations, {
-      value = token,
+    local token_value = table.concat(fields, '-|-')
+    table.insert(tokens, {
+      value = token_value,
       range = {
         begin = pos,
-        ['end'] = pos + string.len(token)
+        ['end'] = pos + string.len(token_value)
       },
       attention = attn[i]
     })
-    pos = pos + string.len(token) + 1
+    pos = pos + string.len(token_value) + 1
   end
-  return annotations
+
+  return tokens
 end
 
 local function clean_sent(sent)
@@ -706,10 +707,12 @@ local function extract_features(tokens)
   local features = {}
 
   for _, entry in pairs(tokens) do
-    local field = entry:split('%-|%-')
+    local field = entry.value:split('%-|%-')
     local word = clean_sent(field[1])
     if string.len(word) > 0 then
-     table.insert(cleaned_tokens, word)
+      local cleaned_token = copy(entry)
+      cleaned_token.value = word
+      table.insert(cleaned_tokens, cleaned_token)
 
       if #field > 1 then
         table.insert(features, {})
@@ -922,7 +925,7 @@ local function search(tokens, gold)
   local pred, pred_features, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(
     opt.beam, opt.max_sent_l, source, source_features, target, target_features)
 
-  local pred_annotations = wordidx2annotations(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn)
+  local pred_tokens = wordidx2tokens(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn)
 
   local info = {
     nbests = {},
@@ -937,15 +940,15 @@ local function search(tokens, gold)
 
   if opt.n_best > 1 and model_opt.num_target_features == 0 then
     for n = 1, opt.n_best do
-      local pred_annotations_n = wordidx2annotations(all_sents[n], pred_features, idx2word_targ, idx2feature_targ, source_str, all_attn[n])
+      local pred_tokens_n = wordidx2tokens(all_sents[n], pred_features, idx2word_targ, idx2feature_targ, source_str, all_attn[n])
       table.insert(info.nbests, {
-        annotations = pred_annotations_n,
+        tokens = pred_tokens_n,
         score = all_scores[n]
       })
     end
   end
 
-  return pred_annotations, info
+  return pred_tokens, info
 end
 
 return {

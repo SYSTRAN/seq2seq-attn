@@ -3,19 +3,19 @@ local path = require 'pl.path'
 
 local function sent2tokens(line)
   local tokens = {}
-  for tok in line:gmatch'([^%s]+)' do
-    table.insert(tokens, tok)
+  for word in line:gmatch'([^%s]+)' do
+    table.insert(tokens, {value = word})
   end
   return tokens
 end
 
-local function annotations2sent(annotations)
-  local tokens = {}
-  for _, annotation in pairs(annotations) do
-    table.insert(tokens, annotation.value)
+local function tokens2sent(tokens)
+  local words = {}
+  for _, token in pairs(tokens) do
+    table.insert(words, token.value)
   end
 
-  return table.concat(tokens, ' ')
+  return table.concat(words, ' ')
 end
 
 local function main()
@@ -51,11 +51,11 @@ local function main()
     print('SENT ' .. sent_id .. ': ' .. line)
 
     if opt.score_gold == 1 then
-      print('GOLD ' .. sent_id .. ': ' .. table.concat(gold[sent_id], ' '))
+      print('GOLD ' .. sent_id .. ': ' .. tokens2sent(gold[sent_id]))
     end
 
-    local annotations, info = beam.search(sent2tokens(line), gold[sent_id])
-    local sent = annotations2sent(annotations)
+    local tokens, info = beam.search(sent2tokens(line), gold[sent_id])
+    local sent = tokens2sent(tokens)
     print('PRED ' .. sent_id .. ': '..sent)
     out_file:write(sent .. '\n')
 
@@ -69,7 +69,7 @@ local function main()
     end
 
     for n = 1, #info.nbests do
-      local nbest = annotations2sent(info.nbests[n].annotations)
+      local nbest = tokens2sent(info.nbests[n].tokens)
       local out_n = string.format("%d ||| %s ||| %.4f", n, nbest, info.nbests[n].score)
       print(out_n)
       out_file:write(nbest .. '\n')

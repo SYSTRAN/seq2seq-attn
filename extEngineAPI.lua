@@ -1,32 +1,23 @@
 local beam = require 's2sa.beam'
 
 
-local function extract_tokens(annotations)
-  local tokens = {}
-  for _, annotation in pairs(annotations) do
-    table.insert(tokens, annotation.value)
-  end
-
-  return tokens
-end
-
 --[[
 Build alignment between source and target tokens
 
 Each target token is aligned with the source token that had the highest attention weight
 when this target token was selected by the beam search.
 ]]
-local function build_alignment(source_annotations, target_annotations)
+local function build_alignment(source_tokens, target_tokens)
   local alignment = {}
 
-  for _, target_annotation in pairs(target_annotations) do
-    local _, max_index = target_annotation.attention:max(1)
+  for _, target_token in pairs(target_tokens) do
+    local _, max_index = target_token.attention:max(1)
     local source_index = max_index[1]
-    if source_index ~= nil and source_index <= #source_annotations then
-      local source_annotation = source_annotations[source_index]
+    if source_index ~= nil and source_index <= #source_tokens then
+      local source_token = source_tokens[source_index]
       table.insert(alignment, {
-        source = source_annotation.range,
-        target = target_annotation.range
+        source = source_token.range,
+        target = target_token.range
       })
     end
   end
@@ -39,17 +30,16 @@ end
 API exposed to the Lua ExtEngine library:
 
   init(arg, resourcesDir)
-  translate(source_annotations)
+  translate(source_tokens)
 ]]
 function init(arg, resources_dir)
   beam.init(arg, resources_dir)
 end
 
-function translate(source_annotations)
-  local source_tokens = extract_tokens(source_annotations)
-  local target_annotations = beam.search(source_tokens)
+function translate(source_tokens)
+  local target_tokens = beam.search(source_tokens)
 
-  local alignment = build_alignment(source_annotations, target_annotations)
+  local alignment = build_alignment(source_tokens, target_tokens)
 
-  return target_annotations, alignment
+  return target_tokens, alignment
 end
