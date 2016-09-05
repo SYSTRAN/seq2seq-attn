@@ -1,13 +1,13 @@
 local beam = require 's2sa.beam'
 
 
-local function extract_tokens(tokens)
-  local source_tokens = {}
-  for _, tok in pairs(tokens) do
-    table.insert(source_tokens, tok.value)
+local function extract_tokens(annotations)
+  local tokens = {}
+  for _, annotation in pairs(annotations) do
+    table.insert(tokens, annotation.value)
   end
 
-  return source_tokens
+  return tokens
 end
 
 --[[
@@ -39,7 +39,7 @@ end
 API exposed to the Lua ExtEngine library:
 
   init(arg, resourcesDir)
-  translatesource_annotations)
+  translate(source_annotations)
 ]]
 function init(arg, resources_dir)
   beam.init(arg, resources_dir)
