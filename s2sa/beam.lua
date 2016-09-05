@@ -289,7 +289,7 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
         for k = 1, K do
           local _, idx = torch.sort(out[1+j][k], true)
           local best = 1
-          while idx[best] <= 4 do
+          while idx[best] <= END do
             best = best + 1
           end
           next_ys_features[i][j][k] = idx[best]
@@ -365,13 +365,13 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
           else
             local lk, idx = torch.sort(next_ys_features[i][j][k], true)
             local best = 1
-            while idx[best] <= 4 do
+            while idx[best] <= END do
               best = best + 1
             end
             table.insert(hyp, idx[best])
             for l = best+1, lk:size(1) do
               if lk[best] - lk[l] < 0.05 then
-                if idx[l] > 4 then
+                if idx[l] > END then
                   table.insert(hyp, idx[l])
                 end
               else
