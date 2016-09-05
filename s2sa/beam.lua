@@ -288,7 +288,11 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
       if model_opt.target_features_lookup[j] == true then
         for k = 1, K do
           local _, idx = torch.sort(out[1+j][k], true)
-          next_ys_features[i][j][k] = idx[1]
+          local best = 1
+          while idx[best] <= 4 do
+            best = best + 1
+          end
+          next_ys_features[i][j][k] = idx[best]
         end
       else
         next_ys_features[i][j]:copy(out[1+j])
@@ -360,9 +364,16 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
             table.insert(hyp, next_ys_features[i][j][k])
           else
             local lk, idx = torch.sort(next_ys_features[i][j][k], true)
-            for l = 1, lk:size(1) do
-              if lk[1] - lk[l] < 0.05 then
-                table.insert(hyp, idx[l])
+            local best = 1
+            while idx[best] <= 4 do
+              best = best + 1
+            end
+            table.insert(hyp, idx[best])
+            for l = best+1, lk:size(1) do
+              if lk[best] - lk[l] < 0.05 then
+                if idx[l] > 4 then
+                  table.insert(hyp, idx[l])
+                end
               else
                 break
               end
