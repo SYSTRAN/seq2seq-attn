@@ -123,7 +123,7 @@ def get_data(args):
         target_output = np.zeros((num_sents, newseqlength), dtype=int)
         sources = np.zeros((num_sents, newseqlength), dtype=int)
         if len(alignmentfile) > 0:
-            alignments = np.zeros((num_sents,newseqlength,newseqlength), dtype=bool)
+            alignments = np.zeros((num_sents,newseqlength,newseqlength), dtype=np.uint8)
             alignment_origs = open(alignmentfile, 'r')
         else:
             alignments = None
@@ -212,7 +212,9 @@ def get_data(args):
                     aFrom, aTo = align.split('-')
                     aFrom = int(aFrom)
                     aTo = int(aTo)
-                    alignments[sent_id][aFrom][aTo] = True
+                    alignments[sent_id][aFrom][aTo] = 1
+#                    print("{}: {}-{}".format(sent_id,aFrom,aTo))
+#                print(alignments[sent_id])
 
             sent_id += 1
             if sent_id % 100000 == 0:
