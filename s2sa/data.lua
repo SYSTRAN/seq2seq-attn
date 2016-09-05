@@ -25,6 +25,13 @@ function data:__init(opt, data_file)
   self.source_size = f:read('source_size'):all()[1]
   self.target_nonzeros = f:read('target_nonzeros'):all()
 
+  if opt.guided_alignment == 1 then
+    self.alignment = f:read('alignment'):all()
+    self.alignment = torch.FloatTensor(self.alignment:size()):copy(self.alignment)
+--    print(string.format('num alignments at 1: %d\n', torch.sum(self.alignment[{1,{},{}}])))
+--    print(self.alignment[{1,{1,self.source_l[1]},{1,self.target_l[1]}}])
+  end
+
   if opt.use_chars_enc == 1 then
     self.source_char = f:read('source_char'):all()
     self.char_size = f:read('char_size'):all()[1]
@@ -75,7 +82,22 @@ function data:__init(opt, data_file)
       target_i = self.target:sub(self.batch_idx[i], self.batch_idx[i]+self.batch_l[i]-1,
         1, self.target_l[i]):transpose(1,2)
     end
-    table.insert(self.batches, {target_i,
+
+    if opt.guided_alignment == 1 then
+      local alignment_i = self.alignment:sub(self.batch_idx[i], self.batch_idx[i]+self.batch_l[i]-1,
+                                             1, self.source_l[i], 
+                                             1, self.target_l[i])
+      table.insert(self.batches, {target_i,
+        target_output_i:transpose(1,2),
+        self.target_nonzeros[i],
+        source_i,
+        self.batch_l[i],
+        self.target_l[i],
+        self.source_l[i],
+        target_l_i,
+        alignment_i})
+    else
+        table.insert(self.batches, {target_i,
         target_output_i:transpose(1,2),
         self.target_nonzeros[i],
         source_i,
@@ -83,6 +105,7 @@ function data:__init(opt, data_file)
         self.target_l[i],
         self.source_l[i],
         target_l_i})
+    end
   end
 end
 
@@ -102,6 +125,12 @@ function data.__index(self, idx)
     local target_l = self.batches[idx][6]
     local source_l = self.batches[idx][7]
     local target_l_all = self.batches[idx][8]
+
+    local alignment
+    if opt.guided_alignment == 1 then
+       alignment = self.batches[idx][9]
+    end
+
     if opt.gpuid >= 0 then --if multi-gpu, source lives in gpuid1, rest on gpuid2
       cutorch.setDevice(opt.gpuid)
       source_input = source_input:cuda()
@@ -111,9 +140,19 @@ function data.__index(self, idx)
       target_input = target_input:cuda()
       target_output = target_output:cuda()
       target_l_all = target_l_all:cuda()
+      -- criterion is on gpuid2
+      if opt.guided_alignment == 1 then
+        alignment = alignment:cuda()
+      end
     end
+
+    if opt.guided_alignment == 1 then
     return {target_input, target_output, nonzeros, source_input,
+      batch_l, target_l, source_l, target_l_all, alignment}
+    else
+      return {target_input, target_output, nonzeros, source_input,
       batch_l, target_l, source_l, target_l_all}
+    end
   end
 end
 
