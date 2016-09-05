@@ -904,6 +904,40 @@ local function init(arg, resourcesDir)
   State = StateAll
 end
 
+
+--[[
+  @table token
+
+  @field value - token value (word)
+  @field [attention] - attention tensor used for predicting the token
+  @field [range] - token range:
+    {
+      begin = <begin char index>,
+      end = <end char index (not including)>
+    }
+]]
+
+--[[
+  @function search
+  @brief Performs a beam search.
+
+  @param tokens - array of input tokens
+  @param gold - array of reference tokens for calculation of gold scores
+  @return pred_tokens - array of predicted tokens
+  @return info - table containing various info:
+    {
+      pred_score = <prediction score>,
+      pred_words = <prediction words count>,
+      gold_score = <gold score>,
+      gold_words = <gold words count>,
+      nbests = [
+        {
+          tokens = <list of tokens>,
+          score = <prediction score>
+        }
+      ]
+    }
+]]
 local function search(tokens, gold)
   local cleaned_tokens, source_features_str = extract_features(tokens)
   local source, source_str
