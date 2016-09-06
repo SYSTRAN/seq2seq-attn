@@ -661,16 +661,6 @@ local function tokens2charidx(tokens, chars_idx, max_word_l, start_symbol)
   return chars, words
 end
 
-local function word_with_max_attention(words, attn)
-  local _, max_index = attn:max(1)
-
-  local word
-  if max_index[1] then
-    word = words[max_index[1]]
-  end
-  return word
-end
-
 local function wordidx2tokens(sent, features, idx2word, idx2feature, source_words, attn)
   local tokens = {}
   local pos = 0
@@ -678,7 +668,10 @@ local function wordidx2tokens(sent, features, idx2word, idx2feature, source_word
   for i = 2, #sent-1 do -- skip START and END
     local fields = {}
     if sent[i] == UNK and opt.replace_unk == 1 then
-      local s = word_with_max_attention(source_words, attn[i])
+      -- retrieve source word with max attention
+      local _, max_index = attn[i]:max(1)
+      local s = source_words[max_index[1]]
+
       if phrase_table[s] ~= nil then
         print('Unknown token "' .. s .. '" replaced by source token "' ..phrase_table[s] .. '"')
       end
