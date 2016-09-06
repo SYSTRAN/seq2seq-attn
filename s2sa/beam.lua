@@ -922,7 +922,7 @@ end
   @brief Performs a beam search.
 
   @param tokens - array of input tokens
-  @param gold - array of reference tokens for calculation of gold scores
+  @param gold - array of reference tokens for calculating gold scores
   @return pred_tokens - array of predicted tokens
   @return info - table containing various info:
     {
@@ -932,7 +932,7 @@ end
       gold_words = <gold words count>,
       nbests = [
         {
-          tokens = <list of tokens>,
+          tokens = <array of tokens>,
           score = <prediction score>
         }
       ]
