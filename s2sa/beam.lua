@@ -116,6 +116,15 @@ function flat_to_rc(v, flat_index)
 end
 
 function generate_beam(model, initial, K, max_sent_l, source, source_features, gold, gold_features)
+
+  local function get_best_label(idx)
+    local best = 1
+    while idx[best] <= END do -- ignore special labels
+      best = best + 1
+    end
+    return best
+  end
+
   --reset decoder initial states
   if opt.gpuid >= 0 and opt.gpuid2 >= 0 then
     cutorch.setDevice(opt.gpuid)
@@ -288,10 +297,7 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
       if model_opt.target_features_lookup[j] == true then
         for k = 1, K do
           local _, idx = torch.sort(out[1+j][k], true)
-          local best = 1
-          while idx[best] <= END do
-            best = best + 1
-          end
+          local best = get_best_label(idx)
           next_ys_features[i][j][k] = idx[best]
         end
       else
@@ -364,10 +370,7 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
             table.insert(hyp, next_ys_features[i][j][k])
           else
             local lk, idx = torch.sort(next_ys_features[i][j][k], true)
-            local best = 1
-            while idx[best] <= END do
-              best = best + 1
-            end
+            local best = get_best_label(idx)
             table.insert(hyp, idx[best])
             for l = best+1, lk:size(1) do
               if lk[best] - lk[l] < 0.05 then
