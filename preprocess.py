@@ -46,7 +46,10 @@ class Indexer:
         items = [(v, k) for k, v in self.d.iteritems()]
         items.sort()
         for v, k in items:
-            print >>out, k.encode('utf-8'), v
+            if chars == 1:
+                print >>out, k.encode('utf-8'), v
+            else:
+                print >>out, k, v
         out.close()
 
     def prune_vocab(self, k):
@@ -61,7 +64,10 @@ class Indexer:
     def load_vocab(self, vocab_file, chars=0):
         self.d = {}
         for line in open(vocab_file, 'r'):
-            v, k = line.decode("utf-8").strip().split()
+            if chars == 1:
+                v, k = line.decode("utf-8").strip().split()
+            else:
+                v, k = line.strip().split()
             self.d[v] = int(k)
 
 def pad(ls, length, symbol):
@@ -126,41 +132,46 @@ def get_data(args):
                     indexers[index].add_w(values)
                 index += 1
 
-    def make_vocab(srcfile, targetfile, seqlength, max_word_l=0, chars=0):
+    def make_vocab(srcfile, targetfile, seqlength, max_word_l=0, chars=0, train=1):
         num_sents = 0
         for _, (src_orig, targ_orig) in \
                 enumerate(itertools.izip(open(srcfile,'r'), open(targetfile,'r'))):
             src_orig, src_orig_features = load_sentence(src_orig, src_feature_indexers)
             targ_orig, targ_orig_features = load_sentence(targ_orig, target_feature_indexers)
-            src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
-            targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
+            if chars == 1:
+                src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
+                targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
+            else:
+                src_orig = src_indexer.clean(src_orig.strip())
+                targ_orig = target_indexer.clean(targ_orig.strip())
             targ = targ_orig.strip().split()
             src = src_orig.strip().split()
             if len(targ) > seqlength or len(src) > seqlength or len(targ) < 1 or len(src) < 1:
                 continue
             num_sents += 1
-            for word in targ:
-                if chars == 1:
-                    word = char_indexer.clean(word)
-                    if len(word) == 0:
-                        continue
-                    max_word_l = max(len(word)+2, max_word_l)
-                    for char in list(word):
-                        char_indexer.vocab[char] += 1
-                target_indexer.vocab[word] += 1
+            if train == 1:
+                for word in targ:
+                    if chars == 1:
+                        word = char_indexer.clean(word)
+                        if len(word) == 0:
+                            continue
+                        max_word_l = max(len(word)+2, max_word_l)
+                        for char in list(word):
+                            char_indexer.vocab[char] += 1
+                    target_indexer.vocab[word] += 1
 
-            add_features_vocab(src_orig_features, src_feature_indexers)
-            add_features_vocab(targ_orig_features, target_feature_indexers)
+                add_features_vocab(src_orig_features, src_feature_indexers)
+                add_features_vocab(targ_orig_features, target_feature_indexers)
 
-            for word in src:
-                if chars == 1:
-                    word = char_indexer.clean(word)
-                    if len(word) == 0:
-                        continue
-                    max_word_l = max(len(word)+2, max_word_l)
-                    for char in list(word):
-                        char_indexer.vocab[char] += 1
-                src_indexer.vocab[word] += 1
+                for word in src:
+                    if chars == 1:
+                        word = char_indexer.clean(word)
+                        if len(word) == 0:
+                            continue
+                        max_word_l = max(len(word)+2, max_word_l)
+                        for char in list(word):
+                            char_indexer.vocab[char] += 1
+                    src_indexer.vocab[word] += 1
 
         return max_word_l, num_sents
 
@@ -447,7 +458,7 @@ def get_data(args):
 
     print("Number of sentences in training: {}".format(num_sents_train))
     max_word_l, num_sents_valid = make_vocab(args.srcvalfile, args.targetvalfile,
-                                             args.seqlength, max_word_l, args.chars)
+                                             args.seqlength, max_word_l, args.chars, 0)
     print("Number of sentences in valid: {}".format(num_sents_valid))
     if args.chars == 1:
         print("Max word length (before cutting): {}".format(max_word_l))

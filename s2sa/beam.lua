@@ -151,6 +151,15 @@ local function flat_to_rc(v, flat_index)
 end
 
 local function generate_beam(K, max_sent_l, source, source_features, gold, gold_features)
+
+  local function get_best_label(idx)
+    local best = 1
+    while idx[best] <= END do -- ignore special labels
+      best = best + 1
+    end
+    return best
+  end
+
   --reset decoder initial states
   local initial = State.initial(START)
 
@@ -327,7 +336,8 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
       if model_opt.target_features_lookup[j] == true then
         for k = 1, K do
           local _, idx = torch.sort(out[1+j][k], true)
-          next_ys_features[i][j][k] = idx[1]
+          local best = get_best_label(idx)
+          next_ys_features[i][j][k] = idx[best]
         end
       else
         next_ys_features[i][j]:copy(out[1+j])
@@ -341,7 +351,11 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
     for j = 1, #out_decoder - 1 do
       table.insert(rnn_state_dec, out_decoder[j])
     end
-    out_float:resize(out[1]:size()):copy(out[1])
+    if type(out) == "table" then
+      out_float:resize(out[1]:size()):copy(out[1])
+    else
+      out_float:resize(out:size()):copy(out)
+    end
     for k = 1, K do
       State.disallow(out_float:select(1, k))
       out_float[k]:add(scores[i-1][k])
@@ -399,9 +413,13 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
             table.insert(hyp, next_ys_features[i][j][k])
           else
             local lk, idx = torch.sort(next_ys_features[i][j][k], true)
-            for l = 1, lk:size(1) do
-              if lk[1] - lk[l] < 0.05 then
-                table.insert(hyp, idx[l])
+            local best = get_best_label(idx)
+            table.insert(hyp, idx[best])
+            for l = best+1, lk:size(1) do
+              if lk[best] - lk[l] < 0.05 then
+                if idx[l] > END then
+                  table.insert(hyp, idx[l])
+                end
               else
                 break
               end
@@ -484,7 +502,11 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
       for j = 1, #out_decoder - 1 do
         table.insert(rnn_state_dec, out_decoder[j])
       end
-      gold_score = gold_score + out[1][1][gold[t]]
+      if type(out) == "table" then
+        gold_score = gold_score + out[1][1][gold[t]]
+      else
+        gold_score = gold_score + out[1][gold[t]]
+      end
     end
   end
   if opt.simple == 1 or end_score > max_score or not found_eos then
