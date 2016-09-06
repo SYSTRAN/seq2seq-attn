@@ -273,7 +273,7 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
   end
 
   local rnn_state_dec_gold
-  if opt.score_gold == 1 then
+  if opt.score_gold == 1 and gold ~= nil then
     rnn_state_dec_gold = {}
     for i = 1, #rnn_state_dec do
       table.insert(rnn_state_dec_gold, rnn_state_dec[i][{{1}}]:clone())
@@ -467,7 +467,7 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
     end
   end
   local gold_score = 0
-  if opt.score_gold == 1 then
+  if opt.score_gold == 1 and gold ~= nil then
     rnn_state_dec = {}
     for fwd_i = 1, #init_fwd_dec do
       table.insert(rnn_state_dec, init_fwd_dec[fwd_i][{{1}}]:zero())
