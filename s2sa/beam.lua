@@ -312,7 +312,11 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
     for j = 1, #out_decoder - 1 do
       table.insert(rnn_state_dec, out_decoder[j])
     end
-    out_float:resize(out[1]:size()):copy(out[1])
+    if type(out) == "table" then
+      out_float:resize(out[1]:size()):copy(out[1])
+    else
+      out_float:resize(out:size()):copy(out)
+    end
     for k = 1, K do
       State.disallow(out_float:select(1, k))
       out_float[k]:add(scores[i-1][k])
@@ -459,7 +463,11 @@ function generate_beam(model, initial, K, max_sent_l, source, source_features, g
       for j = 1, #out_decoder - 1 do
         table.insert(rnn_state_dec, out_decoder[j])
       end
-      gold_score = gold_score + out[1][1][gold[t]]
+      if type(out) == "table" then
+        gold_score = gold_score + out[1][1][gold[t]]
+      else
+        gold_score = gold_score + out[1][gold[t]]
+      end
     end
   end
   if opt.simple == 1 or end_score > max_score or not found_eos then
