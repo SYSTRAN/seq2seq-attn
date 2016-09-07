@@ -240,8 +240,12 @@ def get_data(args):
             src_orig, src_orig_features = load_sentence(src_orig, src_feature_indexers)
             targ_orig, targ_orig_features = load_sentence(targ_orig, target_feature_indexers)
 
-            src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
-            targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
+            if chars == 1:
+                src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
+                targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
+            else:
+                src_orig = src_indexer.clean(src_orig.strip())
+                targ_orig = target_indexer.clean(targ_orig.strip())
 
             targw = [target_indexer.BOS] + targ_orig.strip().split() + [target_indexer.EOS]
             srcw =  [src_indexer.BOS] + src_orig.strip().split() + [src_indexer.EOS]
@@ -249,7 +253,11 @@ def get_data(args):
             if len(targw) > newseqlength or len(srcw) > newseqlength or len(targw) < 3 or len(srcw) < 3:
                 dropped += 1
                 dropped_length += 1
-                print "DROP LEN\t"+src_orig.encode("utf-8")+"\n"+targ_orig.encode("utf-8").strip()+"\t"
+                if chars == 1:
+                    print "DROP LEN\t"+src_orig.encode("utf-8").strip()+"\n"+targ_orig.encode("utf-8").strip()+"\t"
+                else:
+                    print "DROP LEN\t"+src_orig.strip()+"\n"+targ_orig.strip()+"\t"
+           
                 # skip align file
                 if alignfile_hdl: alignfile_hdl.readline()
                 continue
