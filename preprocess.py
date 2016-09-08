@@ -48,8 +48,8 @@ class Indexer:
         for v, k in items:
             if chars == 1:
                 print >>out, k.encode('utf-8'), v
-            else:
-                print >>out, k, v
+            else:    
+                print >>out, k.encode('utf-8'), v #always keep utf8 encode/decode
         out.close()
 
     def prune_vocab(self, k):
@@ -67,7 +67,7 @@ class Indexer:
             if chars == 1:
                 v, k = line.decode("utf-8").strip().split()
             else:
-                v, k = line.strip().split()
+                v, k = line.decode("utf-8").strip().split() #always keep utf8 encode/decode
             self.d[v] = int(k)
 
 def pad(ls, length, symbol):
@@ -142,8 +142,8 @@ def get_data(args):
                 src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
                 targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
             else:
-                src_orig = src_indexer.clean(src_orig.strip())
-                targ_orig = target_indexer.clean(targ_orig.strip())
+                src_orig = src_indexer.clean(src_orig.decode("utf-8").strip()) #always keep utf8 encode/decode
+                targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip()) #always keep utf8 encode/decode
             targ = targ_orig.strip().split()
             src = src_orig.strip().split()
             if len(targ) > seqlength or len(src) > seqlength or len(targ) < 1 or len(src) < 1:
@@ -244,8 +244,8 @@ def get_data(args):
                 src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
                 targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
             else:
-                src_orig = src_indexer.clean(src_orig.strip())
-                targ_orig = target_indexer.clean(targ_orig.strip())
+                src_orig = src_indexer.clean(src_orig.decode("utf-8").strip()) #always keep utf8 encode/decode
+                targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip()) #always keep utf8 encode/decode
 
             targw = [target_indexer.BOS] + targ_orig.strip().split() + [target_indexer.EOS]
             srcw =  [src_indexer.BOS] + src_orig.strip().split() + [src_indexer.EOS]
@@ -256,7 +256,7 @@ def get_data(args):
                 if chars == 1:
                     print "DROP LEN\t"+src_orig.encode("utf-8").strip()+"\n"+targ_orig.encode("utf-8").strip()+"\t"
                 else:
-                    print "DROP LEN\t"+src_orig.strip()+"\n"+targ_orig.strip()+"\t"
+                    print "DROP LEN\t"+src_orig.encode("utf-8").strip()+"\n"+targ_orig.encode("utf-8").strip()+"\t" #always keep utf8 encode/decode
            
                 # skip align file
                 if alignfile_hdl: alignfile_hdl.readline()
