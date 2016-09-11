@@ -14,6 +14,7 @@ cmd = torch.CmdLine()
 cmd:option('-gpu_file', 'gpu_model.t7','gpu model file')
 cmd:option('-cpu_file', 'cpu_model.t7', 'cpu output file')
 cmd:option('-gpuid', 2, 'which gpuid to use')
+cmd:option('-float', 0, 'serialize cpu model using float')
 opt = cmd:parse(arg)
 
 function main()
@@ -25,7 +26,11 @@ function main()
   end
   cutorch.setDevice(opt.gpuid)
   for i = 1, #model do
-    model[i]:double()
+    if opt.float == 0 then
+      model[i]:double()
+    else
+      model[i]:float()
+    end
   end
   print('saving cpu model to ' .. opt.cpu_file)
   torch.save(opt.cpu_file, {model, model_opt})
