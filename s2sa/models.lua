@@ -59,24 +59,6 @@ function make_lstm(data, opt, model, use_chars)
         end
         word_vecs.name = 'word_vecs' .. name
         x = word_vecs(inputs[1]) -- batch_size x word_vec_size
-        for i = 1, num_features do
-          local feat_x
-          if (model == 'enc' and data.source_features_use_lookup[i] == true)
-            or (model == 'dec' and data.target_features_use_lookup[i] == true) then
-            local feat_vecs
-            if model == 'enc' then
-              feat_vecs = nn.LookupTable(data.source_features_size[i],
-                                         data.source_features_vec_size[i])
-            else
-              feat_vecs = nn.LookupTable(data.target_features_size[i],
-                                         data.target_features_vec_size[i])
-            end
-            feat_x = feat_vecs(inputs[1+i])
-          else
-            feat_x = inputs[1+i]
-          end
-          x = nn.JoinTable(2)({x, feat_x})
-        end
       else
         local char_vecs = nn.LookupTable(data.char_size, opt.char_vec_size)
         char_vecs.name = 'word_vecs' .. name
@@ -88,6 +70,24 @@ function make_lstm(data, opt, model, use_chars)
           mlp.name = 'mlp' .. name
           x = mlp(x)
         end
+      end
+      for i = 1, num_features do
+        local feat_x
+        if (model == 'enc' and data.source_features_use_lookup[i] == true)
+        or (model == 'dec' and data.target_features_use_lookup[i] == true) then
+          local feat_vecs
+          if model == 'enc' then
+            feat_vecs = nn.LookupTable(data.source_features_size[i],
+                                       data.source_features_vec_size[i])
+          else
+            feat_vecs = nn.LookupTable(data.target_features_size[i],
+                                       data.target_features_vec_size[i])
+          end
+          feat_x = feat_vecs(inputs[1+i])
+        else
+          feat_x = inputs[1+i]
+        end
+        x = nn.JoinTable(2)({x, feat_x})
       end
       input_size_L = input_size
       if model == 'dec' then
