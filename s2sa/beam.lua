@@ -282,10 +282,8 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
   local end_attn_argmax
   local end_hyp
   local end_score
-  local end_feats_hyp
   local max_hyp
   local max_attn_argmax
-  local max_feats_hyp
 
   local feats_hyp = {}
   for k = 1, K do
@@ -411,9 +409,6 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
 
     end_hyp = states[i][1]
     end_score = scores[i][1]
-    if model_opt.num_target_features > 0 then
-      end_feats_hyp = feats_hyp[1]
-    end
     if model_opt.attn == 1 then
       end_attn_argmax = attn_argmax[i][1]
     end
@@ -428,9 +423,6 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
           if scores[i][k] > max_score then
             max_hyp = possible_hyp
             max_score = scores[i][k]
-            if model_opt.num_target_features > 0 then
-              max_feats_hyp = feats_hyp[k]
-            end
             if model_opt.attn == 1 then
               max_attn_argmax = attn_argmax[i][k]
             end
@@ -486,8 +478,21 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
     max_hyp = end_hyp
     max_score = end_score
     max_attn_argmax = end_attn_argmax
-    if model_opt.num_target_features > 0 then
-      max_feats_hyp = end_feats_hyp
+  end
+
+  local max_feats_hyp = {}
+
+  if model_opt.num_target_features > 0 then
+    for j = 1, i-1 do
+      table.insert(max_feats_hyp, {})
+    end
+
+    local j = i
+    local k = 1
+    while j > 1 do
+      k = prev_ks[j][k]
+      j = j - 1
+      max_feats_hyp[j] = feats_hyp[k][j]
     end
   end
 
