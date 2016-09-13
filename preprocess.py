@@ -192,10 +192,11 @@ def get_data(args):
 
             features = []
             for i in range(len(orig_features)):
-                features.append([[indexers[i].BOS]] + orig_features[i] + [[indexers[i].EOS]])
+                features.append([[indexers[i].UNK]] + [[indexers[i].BOS]]
+                                + orig_features[i] + [[indexers[i].EOS]])
 
             for i in range(len(features)):
-                features[i] = pad(features[i], seqlength, [indexers[i].PAD])
+                features[i] = pad(features[i], seqlength+1, [indexers[i].PAD])
                 for j in range(len(features[i])):
                     features[i][j] = indexers[i].convert_sequence(features[i][j])
                     identifier = values_to_identifier(features[i][j], len(indexers[i].d))
@@ -338,10 +339,10 @@ def get_data(args):
             target_features = load_features(targ_orig_features, target_feature_indexers, newseqlength+1)
 
             for i in range(len(target_feature_indexers)):
-                targets_features[i][sent_id] = np.array(target_features[i][:-1], dtype=int)
-                targets_features_output[i][sent_id] = np.array(target_features[i][1:], dtype=int)
+                targets_features[i][sent_id] = np.array(target_features[i][:-2], dtype=int)
+                targets_features_output[i][sent_id] = np.array(target_features[i][1:-1], dtype=int)
             for i in range(len(src_feature_indexers)):
-                sources_features[i][sent_id] = np.array(source_features[i], dtype=int)
+                sources_features[i][sent_id] = np.array(source_features[i][1:], dtype=int)
 
             sent_id += 1
             if sent_id % 100000 == 0:
