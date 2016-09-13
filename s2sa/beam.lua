@@ -152,14 +152,6 @@ end
 
 local function generate_beam(K, max_sent_l, source, source_features, gold, gold_features)
 
-  local function get_best_label(idx)
-    local best = 1
-    while idx[best] <= END do -- ignore special labels
-      best = best + 1
-    end
-    return best
-  end
-
   --reset decoder initial states
   local initial = State.initial(START)
 
@@ -394,7 +386,7 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
         table.insert(feats_hyp[k], {})
         for j = 1, model_opt.num_target_features do
           local lk, idx = torch.sort(out[1+j][k], true)
-          local best = get_best_label(idx)
+          local best = 1
           local hyp = {}
           if model_opt.target_features_lookup[j] == true then
             next_ys_features[i][j][k] = idx[best]
