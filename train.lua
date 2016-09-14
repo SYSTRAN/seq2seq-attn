@@ -57,7 +57,7 @@ cmd:option('-guided_alignment', 0, [[If 1, use external alignments to guide the 
                           (Chen et al., Guided Alignment Training for Topic-Aware Neural Machine Translation,
                           arXiv 2016.). Alignments should have been provided during preprocess]])
 
-cmd:option('-guided_alignment_weight', 0.2, [[default weights for external alignments]])
+cmd:option('-guided_alignment_weight', 0.5, [[default weights for external alignments]])
 
 cmd:text("")
 cmd:text("Below options only apply if using the character model.")
@@ -954,7 +954,7 @@ function main()
     criterion = nn.ParallelCriterion()
     criterion:add(cll_criterion, (1-opt.guided_alignment_weight))
     -- sum of binary reconstruction loss over all input/output pair; averaged
-    criterion:add(nn.BCECriterion(), opt.guided_alignment_weight)
+    criterion:add(nn.MSECriterion(), opt.guided_alignment_weight)
   end
 
   layers = {encoder, decoder, generator}
