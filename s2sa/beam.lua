@@ -487,12 +487,11 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
       table.insert(max_feats_hyp, {})
     end
 
-    local j = i
+    -- follow beam path to build the features sequence
     local k = 1
-    while j > 1 do
+    for j = i, 2, -1 do
       k = prev_ks[j][k]
-      j = j - 1
-      max_feats_hyp[j] = feats_hyp[k][j]
+      max_feats_hyp[j-1] = feats_hyp[k][j-1]
     end
   end
 
