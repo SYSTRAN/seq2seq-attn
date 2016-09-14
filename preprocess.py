@@ -212,7 +212,7 @@ def get_data(args):
                     aFrom, aTo = align.split('-')
                     aFrom = int(aFrom)
                     aTo = int(aTo)
-                    alignments[sent_id][aFrom][aTo] = 1
+                    alignments[sent_id][aFrom + 1][aTo + 1] = 1
 #                    print("{}: {}-{}".format(sent_id,aFrom,aTo))
 #                print(alignments[sent_id])
 
