@@ -573,8 +573,17 @@ local function get_feature_embedding(values, feature2idx, vocab_size, use_lookup
   end
 end
 
-local function features2featureidx(features, feature2idx, idx2feature, use_lookup, start_symbol)
+local function features2featureidx(features, feature2idx, idx2feature,
+                                   use_lookup, start_symbol, decoder)
   local out = {}
+
+  if decoder == 1 then
+    table.insert(out, {})
+    for j = 1, #feature2idx do
+      local emb = get_feature_embedding({UNK_WORD}, feature2idx[j], #idx2feature[j], use_lookup[j])
+      table.insert(out[#out], emb)
+    end
+  end
 
   if start_symbol == 1 then
     table.insert(out, {})
@@ -592,7 +601,7 @@ local function features2featureidx(features, feature2idx, idx2feature, use_looku
     end
   end
 
-  if start_symbol == 1 then
+  if start_symbol == 1 and decoder == 0 then
     table.insert(out, {})
     for j = 1, #feature2idx do
       local emb = get_feature_embedding({END_WORD}, feature2idx[j], #idx2feature[j], use_lookup[j])
@@ -936,7 +945,7 @@ end
 local function search(tokens, gold)
   local cleaned_tokens, source_features_str = extract_features(tokens)
   local source, source_str
-  local source_features = features2featureidx(source_features_str, feature2idx_src, idx2feature_src, model_opt.source_features_lookup, model_opt.start_symbol)
+  local source_features = features2featureidx(source_features_str, feature2idx_src, idx2feature_src, model_opt.source_features_lookup, model_opt.start_symbol, 0)
   if model_opt.use_chars_enc == 0 then
     source, source_str = tokens2wordidx(cleaned_tokens, word2idx_src, model_opt.start_symbol)
   else
@@ -948,7 +957,7 @@ local function search(tokens, gold)
   if gold ~= nil then
     local gold_tokens, target_features_str = extract_features(gold)
     target = tokens2wordidx(gold_tokens, word2idx_targ, 1)
-    target_features = features2featureidx(target_features_str, feature2idx_targ, idx2feature_targ, model_opt.target_features_lookup, 1)
+    target_features = features2featureidx(target_features_str, feature2idx_targ, idx2feature_targ, model_opt.target_features_lookup, 1, 1)
   end
 
   local pred, pred_features, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(
