@@ -152,14 +152,6 @@ end
 
 local function generate_beam(K, max_sent_l, source, source_features, gold, gold_features)
 
-  local function get_best_label(idx)
-    local best = 1
-    while idx[best] <= END do -- ignore special labels
-      best = best + 1
-    end
-    return best
-  end
-
   --reset decoder initial states
   local initial = State.initial(START)
 
@@ -197,17 +189,9 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
   next_ys[1][1] = State.next(initial)
   for j = 1, model_opt.num_target_features do
     if model_opt.target_features_lookup[j] == true then
-      next_ys_features[1][j][1] = START
+      next_ys_features[1][j][1] = UNK
     else
-      next_ys_features[1][j][1][START] = 1
-    end
-  end
-
-  local max_hyp_feats = {}
-  if model_opt.num_target_features > 0 then
-    table.insert(max_hyp_feats, {})
-    for _ = 1, model_opt.num_target_features do
-      table.insert(max_hyp_feats[1], {START})
+      next_ys_features[1][j][1][UNK] = 1
     end
   end
 
@@ -301,6 +285,11 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
   local max_hyp
   local max_attn_argmax
 
+  local feats_hyp = {}
+  for k = 1, K do
+    table.insert(feats_hyp, {})
+  end
+
   while (not done) and (i < n) do
     i = i+1
     states[i] = {}
@@ -331,18 +320,6 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
     append_table(decoder_input, rnn_state_dec)
     local out_decoder = model[2]:forward(decoder_input)
     local out = model[3]:forward(out_decoder[#out_decoder]) -- K x vocab_size
-
-    for j = 1, model_opt.num_target_features do
-      if model_opt.target_features_lookup[j] == true then
-        for k = 1, K do
-          local _, idx = torch.sort(out[1+j][k], true)
-          local best = get_best_label(idx)
-          next_ys_features[i][j][k] = idx[best]
-        end
-      else
-        next_ys_features[i][j]:copy(out[1+j])
-      end
-    end
 
     rnn_state_dec = {} -- to be modified later
     if model_opt.input_feed == 1 then
@@ -402,18 +379,18 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
       rnn_state_dec[j]:copy(rnn_state_dec[j]:index(1, prev_ks[i]))
     end
 
-    local pred_feats
     if model_opt.num_target_features > 0 then
-      pred_feats = {}
       for k = 1, K do
-        table.insert(pred_feats, {})
+        table.insert(feats_hyp[k], {})
         for j = 1, model_opt.num_target_features do
+          local lk, idx = torch.sort(out[1+j][k], true)
+          local best = 1
           local hyp = {}
           if model_opt.target_features_lookup[j] == true then
-            table.insert(hyp, next_ys_features[i][j][k])
+            next_ys_features[i][j][k] = idx[best]
+            hyp[1] = idx[best]
           else
-            local lk, idx = torch.sort(next_ys_features[i][j][k], true)
-            local best = get_best_label(idx)
+            next_ys_features[i][j]:copy(out[1+j])
             table.insert(hyp, idx[best])
             for l = best+1, lk:size(1) do
               if lk[best] - lk[l] < 0.05 then
@@ -425,7 +402,7 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
               end
             end
           end
-          table.insert(pred_feats[k], hyp)
+          table.insert(feats_hyp[k][i-1], hyp)
         end
       end
     end
@@ -436,22 +413,14 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
       end_attn_argmax = attn_argmax[i][1]
     end
     if end_hyp[#end_hyp] == END then
-      if model_opt.num_target_features > 0 then
-        table.insert(max_hyp_feats, {})
-        for _ = 1, model_opt.num_target_features do
-          table.insert(max_hyp_feats[#max_hyp_feats], {END})
-        end
-      end
       done = true
       found_eos = true
     else
-      local best_k = 1
       for k = 1, K do
         local possible_hyp = states[i][k]
         if possible_hyp[#possible_hyp] == END then
           found_eos = true
           if scores[i][k] > max_score then
-            best_k = k
             max_hyp = possible_hyp
             max_score = scores[i][k]
             if model_opt.attn == 1 then
@@ -459,10 +428,6 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
             end
           end
         end
-      end
-
-      if model_opt.num_target_features > 0 then
-        table.insert(max_hyp_feats, pred_feats[best_k])
       end
     end
   end
@@ -515,7 +480,22 @@ local function generate_beam(K, max_sent_l, source, source_features, gold, gold_
     max_attn_argmax = end_attn_argmax
   end
 
-  return max_hyp, max_hyp_feats, max_score, max_attn_argmax, gold_score, states[i], scores[i], attn_argmax[i]
+  local max_feats_hyp = {}
+
+  if model_opt.num_target_features > 0 then
+    for j = 1, i-1 do
+      table.insert(max_feats_hyp, {})
+    end
+
+    -- follow beam path to build the features sequence
+    local k = 1
+    for j = i, 2, -1 do
+      k = prev_ks[j][k]
+      max_feats_hyp[j-1] = feats_hyp[k][j-1]
+    end
+  end
+
+  return max_hyp, max_feats_hyp, max_score, max_attn_argmax, gold_score, states[i], scores[i], attn_argmax[i]
 end
 
 local function idx2key(file)
@@ -593,8 +573,17 @@ local function get_feature_embedding(values, feature2idx, vocab_size, use_lookup
   end
 end
 
-local function features2featureidx(features, feature2idx, idx2feature, use_lookup, start_symbol)
+local function features2featureidx(features, feature2idx, idx2feature,
+                                   use_lookup, start_symbol, decoder)
   local out = {}
+
+  if decoder == 1 then
+    table.insert(out, {})
+    for j = 1, #feature2idx do
+      local emb = get_feature_embedding({UNK_WORD}, feature2idx[j], #idx2feature[j], use_lookup[j])
+      table.insert(out[#out], emb)
+    end
+  end
 
   if start_symbol == 1 then
     table.insert(out, {})
@@ -612,7 +601,7 @@ local function features2featureidx(features, feature2idx, idx2feature, use_looku
     end
   end
 
-  if start_symbol == 1 then
+  if start_symbol == 1 and decoder == 0 then
     table.insert(out, {})
     for j = 1, #feature2idx do
       local emb = get_feature_embedding({END_WORD}, feature2idx[j], #idx2feature[j], use_lookup[j])
@@ -956,7 +945,7 @@ end
 local function search(tokens, gold)
   local cleaned_tokens, source_features_str = extract_features(tokens)
   local source, source_str
-  local source_features = features2featureidx(source_features_str, feature2idx_src, idx2feature_src, model_opt.source_features_lookup, model_opt.start_symbol)
+  local source_features = features2featureidx(source_features_str, feature2idx_src, idx2feature_src, model_opt.source_features_lookup, model_opt.start_symbol, 0)
   if model_opt.use_chars_enc == 0 then
     source, source_str = tokens2wordidx(cleaned_tokens, word2idx_src, model_opt.start_symbol)
   else
@@ -968,7 +957,7 @@ local function search(tokens, gold)
   if gold ~= nil then
     local gold_tokens, target_features_str = extract_features(gold)
     target = tokens2wordidx(gold_tokens, word2idx_targ, 1)
-    target_features = features2featureidx(target_features_str, feature2idx_targ, idx2feature_targ, model_opt.target_features_lookup, 1)
+    target_features = features2featureidx(target_features_str, feature2idx_targ, idx2feature_targ, model_opt.target_features_lookup, 1, 1)
   end
 
   local pred, pred_features, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(
