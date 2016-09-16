@@ -1,15 +1,5 @@
 require 's2sa.util'
-
-function nn.Module:reuseMem()
-  self.reuse = true
-  return self
-end
-
-function nn.Module:setReuse()
-  if self.reuse then
-    self.gradInput = self.output
-  end
-end
+require 's2sa.memory'
 
 function make_lstm(data, opt, model, use_chars)
   assert(model == 'enc' or model == 'dec')
@@ -17,6 +7,7 @@ function make_lstm(data, opt, model, use_chars)
   local dropout = opt.dropout or 0
   local n = opt.num_layers
   local rnn_size = opt.rnn_size
+  local RnnD={opt.rnn_size,opt.rnn_size}
   local input_size
   if use_chars == 0 then
     input_size = opt.word_vec_size
@@ -24,9 +15,19 @@ function make_lstm(data, opt, model, use_chars)
     input_size = opt.num_kernels
   end
   local offset = 0
+  local num_features
+  if model == 'enc' then
+    num_features = data.num_source_features
+  else
+    num_features = data.num_target_features
+  end
   -- there will be 2*n+3 inputs
   local inputs = {}
   table.insert(inputs, nn.Identity()()) -- x (batch_size x max_word_l)
+  for i = 1, num_features do
+    table.insert(inputs, nn.Identity()()) -- table of features
+    offset = offset + 1
+  end
   if model == 'dec' then
     table.insert(inputs, nn.Identity()()) -- all context (batch_size x source_l x rnn_size)
     offset = offset + 1
@@ -43,6 +44,7 @@ function make_lstm(data, opt, model, use_chars)
   local x, input_size_L
   local outputs = {}
   for L = 1,n do
+    local nameL=model..'_L'..L..'_'
     -- c,h from previous timesteps
     local prev_c = inputs[L*2+offset]
     local prev_h = inputs[L*2+1+offset]
@@ -69,12 +71,35 @@ function make_lstm(data, opt, model, use_chars)
           x = mlp(x)
         end
       end
+      for i = 1, num_features do
+        local feat_x
+        if (model == 'enc' and data.source_features_use_lookup[i] == true)
+        or (model == 'dec' and data.target_features_use_lookup[i] == true) then
+          local feat_vecs
+          if model == 'enc' then
+            feat_vecs = nn.LookupTable(data.source_features_size[i],
+                                       data.source_features_vec_size[i])
+          else
+            feat_vecs = nn.LookupTable(data.target_features_size[i],
+                                       data.target_features_vec_size[i])
+          end
+          feat_x = feat_vecs(inputs[1+i])
+        else
+          feat_x = inputs[1+i]
+        end
+        x = nn.JoinTable(2)({x, feat_x})
+      end
       input_size_L = input_size
       if model == 'dec' then
+        input_size_L = input_size_L + data.total_target_features_size
         if opt.input_feed == 1 then
-          x = nn.JoinTable(2)({x, inputs[1+offset]}) -- batch_size x (word_vec_size + rnn_size)
-          input_size_L = input_size + rnn_size
+          x = nn.JoinTable(2):usePrealloc("dec_inputfeed_join",
+                                          {{opt.max_batch_l, opt.word_vec_size},{opt.max_batch_l, opt.rnn_size}})
+                             ({x, inputs[1+offset]}) -- batch_size x (word_vec_size + rnn_size)
+          input_size_L = input_size_L + rnn_size
         end
+      else
+        input_size_L = input_size_L + data.total_source_features_size
       end
     else
       x = outputs[(L-1)*2]
@@ -85,32 +110,46 @@ function make_lstm(data, opt, model, use_chars)
       if opt.multi_attn == L and model == 'dec' then
         local multi_attn = make_decoder_attn(data, opt, 1)
         multi_attn.name = 'multi_attn' .. L
-        x = multi_attn({x, inputs[2]})
+        x = multi_attn({x, inputs[2+num_features]})
       end
       if dropout > 0 then
-        x = nn.Dropout(dropout, nil, false)(x)
+        x = nn.Dropout(dropout, nil, false):usePrealloc(nameL.."dropout",
+                                                        {{opt.max_batch_l, input_size_L}})
+                                           (x)
       end
     end
     -- evaluate the input sums at once for efficiency
-    local i2h = nn.Linear(input_size_L, 4 * rnn_size):reuseMem()(x)
-    local h2h = nn.LinearNoBias(rnn_size, 4 * rnn_size):reuseMem()(prev_h)
-    local all_input_sums = nn.CAddTable()({i2h, h2h})
+    local i2h = nn.Linear(input_size_L, 4 * rnn_size):usePrealloc(nameL.."i2h-reuse",
+                                                                  {{opt.max_batch_l, input_size_L}},
+                                                                  {{opt.max_batch_l, 4 * rnn_size}})
+                                                     (x)
+    local h2h = nn.LinearNoBias(rnn_size, 4 * rnn_size):usePrealloc(nameL.."h2h-reuse",
+                                                                    {{opt.max_batch_l, rnn_size}},
+                                                                    {{opt.max_batch_l, 4 * rnn_size}})
+                                                       (prev_h)
+    local all_input_sums = nn.CAddTable():usePrealloc(nameL.."allinput",
+                                                      {{opt.max_batch_l, 4*rnn_size},{opt.max_batch_l, 4*rnn_size}},
+                                                      {{opt.max_batch_l, 4 * rnn_size}})
+                                         ({i2h, h2h})
 
     local reshaped = nn.Reshape(4, rnn_size)(all_input_sums)
-    local n1, n2, n3, n4 = nn.SplitTable(2)(reshaped):split(4)
+    local n1, n2, n3, n4 = nn.SplitTable(2):usePrealloc(nameL.."reshapesplit",
+                                                        {{opt.max_batch_l, 4, rnn_size}})
+                                           (reshaped):split(4)
     -- decode the gates
-    local in_gate = nn.Sigmoid():reuseMem()(n1)
-    local forget_gate = nn.Sigmoid():reuseMem()(n2)
-    local out_gate = nn.Sigmoid():reuseMem()(n3)
+    local in_gate = nn.Sigmoid():usePrealloc(nameL.."G1-reuse",{RnnD})(n1)
+    local forget_gate = nn.Sigmoid():usePrealloc(nameL.."G2-reuse",{RnnD})(n2)
+    local out_gate = nn.Sigmoid():usePrealloc(nameL.."G3-reuse",{RnnD})(n3)
     -- decode the write inputs
-    local in_transform = nn.Tanh():reuseMem()(n4)
+    local in_transform = nn.Tanh():usePrealloc(nameL.."G4-reuse",{RnnD})(n4)
     -- perform the LSTM update
-    local next_c = nn.CAddTable()({
-        nn.CMulTable()({forget_gate, prev_c}),
-        nn.CMulTable()({in_gate, in_transform})
+    local next_c = nn.CAddTable():usePrealloc(nameL.."G5a",{RnnD,RnnD})({
+        nn.CMulTable():usePrealloc(nameL.."G5b",{RnnD,RnnD})({forget_gate, prev_c}),
+        nn.CMulTable():usePrealloc(nameL.."G5c",{RnnD,RnnD})({in_gate, in_transform})
       })
     -- gated cells form the output
-    local next_h = nn.CMulTable()({out_gate, nn.Tanh():reuseMem()(next_c)})
+    local next_h = nn.CMulTable():usePrealloc(nameL.."G5d",{RnnD,RnnD})
+                                 ({out_gate, nn.Tanh():usePrealloc(nameL.."G6-reuse",{RnnD})(next_c)})
 
     table.insert(outputs, next_c)
     table.insert(outputs, next_h)
@@ -123,16 +162,17 @@ function make_lstm(data, opt, model, use_chars)
       local decoder_attn = make_decoder_attn(data, opt)
       decoder_attn.name = 'decoder_attn'
       if opt.guided_alignment == 1 then
-        decoder_out, attn_output = decoder_attn({top_h, inputs[2]}):split(2)
+        decoder_out, attn_output = decoder_attn({top_h, inputs[2+num_features]}):split(2)
       else
-        decoder_out = decoder_attn({top_h, inputs[2]})
+        decoder_out = decoder_attn({top_h, inputs[2+num_features]})
       end
     else
-      decoder_out = nn.JoinTable(2)({top_h, inputs[2]})
+      decoder_out = nn.JoinTable(2)({top_h, inputs[2+num_features]})
       decoder_out = nn.Tanh()(nn.LinearNoBias(opt.rnn_size*2, opt.rnn_size)(decoder_out))
     end
     if dropout > 0 then
-      decoder_out = nn.Dropout(dropout, nil, false)(decoder_out)
+      decoder_out = nn.Dropout(dropout, nil, false):usePrealloc("dec_dropout",{RnnD})
+                                                   (decoder_out)
     end
     table.insert(outputs, decoder_out)
     if opt.guided_alignment == 1 then
@@ -154,7 +194,10 @@ function make_decoder_attn(data, opt, simple)
   simple = simple or 0
   -- get attention
 
-  local attn = nn.MM()({context, nn.Replicate(1,3)(target_t)}) -- batch_l x source_l x 1
+  local attn = nn.MM():usePrealloc("dec_attn_mm1",
+                                   {{opt.max_batch_l, opt.max_sent_l_src, opt.rnn_size},{opt.rnn_size, opt.rnn_size, 1}},
+                                   {{opt.max_batch_l, opt.max_sent_l_src, 1}})
+                      ({context, nn.Replicate(1,3)(target_t)}) -- batch_l x source_l x 1
   attn = nn.Sum(3)(attn)
   local softmax_attn = nn.SoftMax()
   softmax_attn.name = 'softmax_attn'
@@ -168,15 +211,27 @@ function make_decoder_attn(data, opt, simple)
   attn = nn.Replicate(1,2)(attn) -- batch_l x 1 x source_l
 
   -- apply attention to context
-  local context_combined = nn.MM()({attn, context}) -- batch_l x 1 x rnn_size
-  context_combined = nn.Sum(2)(context_combined) -- batch_l x rnn_size
+  local context_combined = nn.MM():usePrealloc("dec_attn_mm2",
+                                               {{opt.max_batch_l, 1, opt.max_sent_l_src},{opt.max_batch_l, opt.max_sent_l_src, opt.rnn_size}},
+                                               {{opt.max_batch_l, 1, opt.rnn_size}})
+                                  ({attn, context}) -- batch_l x 1 x rnn_size
+  context_combined = nn.Sum(2):usePrealloc("dec_attn_sum",
+                                           {{opt.max_batch_l, 1, opt.rnn_size}},
+                                           {{opt.max_batch_l, opt.rnn_size}})
+                              (context_combined) -- batch_l x rnn_size
   local context_output
   if simple == 0 then
-    context_combined = nn.JoinTable(2)({context_combined, inputs[1]}) -- batch_l x rnn_size*2
-    context_output = nn.Tanh()(nn.LinearNoBias(opt.rnn_size*2,
-        opt.rnn_size)(context_combined))
+    context_combined = nn.JoinTable(2):usePrealloc("dec_attn_jointable",
+                                                   {{opt.max_batch_l,opt.rnn_size},{opt.max_batch_l, opt.rnn_size}})
+                                      ({context_combined, inputs[1]}) -- batch_l x rnn_size*2
+    context_output = nn.Tanh():usePrealloc("dec_noattn_tanh",{{opt.max_batch_l,opt.rnn_size}})
+                              (nn.LinearNoBias(opt.rnn_size*2,opt.rnn_size):usePrealloc("dec_noattn_linear",
+                                                                                        {{opt.max_batch_l,2*opt.rnn_size}})
+                                                                           (context_combined))
   else
-    context_output = nn.CAddTable()({context_combined,inputs[1]})
+    context_output = nn.CAddTable():usePrealloc("dec_attn_caddtable1",
+                                                {{opt.max_batch_l, opt.rnn_size}, {opt.max_batch_l, opt.rnn_size}})
+                                   ({context_combined,inputs[1]})
   end
 
   if opt.guided_alignment == 1 then
@@ -187,13 +242,45 @@ function make_decoder_attn(data, opt, simple)
 end
 
 function make_generator(data, opt)
+  local split = nn.ConcatTable()
+  split:add(nn.Linear(opt.rnn_size, data.target_size))
+  for i = 1, data.num_target_features do
+    split:add(nn.Linear(opt.rnn_size, data.target_features_size[i]))
+  end
+
+  local softmax = nn.ParallelTable()
+  softmax:add(nn.LogSoftMax())
+  for i = 1, data.num_target_features do
+    if data.target_features_use_lookup[i] == true then
+      softmax:add(nn.LogSoftMax())
+    else
+      softmax:add(nn.SoftMax())
+    end
+  end
+
   local model = nn.Sequential()
-  model:add(nn.Linear(opt.rnn_size, data.target_size))
-  model:add(nn.LogSoftMax())
+  :add(split)
+  :add(softmax)
+
+  local criterion = nn.ParallelCriterion(false)
   local w = torch.ones(data.target_size)
   w[1] = 0
-  criterion = nn.ClassNLLCriterion(w)
-  criterion.sizeAverage = false
+  local classnll = nn.ClassNLLCriterion(w)
+  classnll.sizeAverage = false
+  criterion:add(classnll)
+  for i = 1, data.num_target_features do
+    if data.target_features_use_lookup[i] == true then
+      local w = torch.ones(data.target_features_size[i])
+      w[1] = 0
+      local classnll = nn.ClassNLLCriterion(w)
+      classnll.sizeAverage = false
+      criterion:add(classnll)
+    else
+      local mse = nn.MSECriterion()
+      mse.sizeAverage = false
+      criterion:add(mse)
+    end
+  end
   return model, criterion
 end
 
@@ -238,7 +325,7 @@ function make_highway(input_size, num_layers, output_size, bias, f)
         nn.Linear(input_size, output_size)(input)))
     carry_gate = nn.AddConstant(1, true)(nn.MulConstant(-1)(transform_gate))
     local proj
-    if input_size==output_size then
+    if input_size == output_size then
       proj = nn.Identity()
     else
       proj = nn.LinearNoBias(input_size, output_size)

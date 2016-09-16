@@ -5,10 +5,49 @@ require 'nngraph'
 require 's2sa.models'
 require 's2sa.data'
 
-path = require 'pl.path'
-stringx = require 'pl.stringx'
+local path = require 'pl.path'
+local stringx = require 'pl.stringx'
+local utf8 --loaded when using character models only
 
-local sent_id = 0
+if type(string.split) ~= "function" then
+  require 's2sa.string_utils'
+end
+
+-- globals
+local PAD = 1
+local UNK = 2
+local START = 3
+local END = 4
+local UNK_WORD = '<unk>'
+local START_WORD = '<s>'
+local END_WORD = '</s>'
+local START_CHAR = '{'
+local END_CHAR = '}'
+local State
+local model
+local model_opt
+local idx2feature_src = {}
+local feature2idx_src = {}
+local idx2feature_targ = {}
+local feature2idx_targ = {}
+local word2charidx_targ
+local init_fwd_enc = {}
+local init_fwd_dec = {}
+local idx2word_src
+local word2idx_src
+local idx2word_targ
+local word2idx_targ
+local context_proto
+local context_proto2
+local decoder_softmax
+local decoder_attn
+local phrase_table
+local word_vecs_enc
+local word_vecs_dec
+local softmax_layers
+local hop_attn
+local char2idx
+
 local opt = {}
 local cmd = torch.CmdLine()
 
@@ -19,6 +58,7 @@ cmd:option('-targ_file', '', [[True target sequence (optional)]])
 cmd:option('-output_file', 'pred.txt', [[Path to output the predictions (each line will be the decoded sequence]])
 cmd:option('-src_dict', 'data/demo.src.dict', [[Path to source vocabulary (*.src.dict file)]])
 cmd:option('-targ_dict', 'data/demo.targ.dict', [[Path to target vocabulary (*.targ.dict file)]])
+cmd:option('-feature_dict_prefix', 'data/demo', [[Prefix of the path to features vocabulary (*.feature_N.dict file)]])
 cmd:option('-char_dict', 'data/demo.char.dict', [[If using chars, path to character vocabulary (*.char.dict file)]])
 
 -- beam search options
@@ -41,18 +81,24 @@ cmd:option('-gpuid', -1, [[ID of the GPU to use (-1 = use CPU)]])
 cmd:option('-gpuid2', -1, [[Second GPU ID]])
 cmd:option('-cudnn', 0, [[If using character model, this should be = 1 if the character model was trained using cudnn]])
 
-function copy(orig)
+local function copy(orig)
   local orig_type = type(orig)
-  local copy
+  local copy_obj
   if orig_type == 'table' then
-    copy = {}
+    copy_obj = {}
     for orig_key, orig_value in pairs(orig) do
-      copy[orig_key] = orig_value
+      copy_obj[orig_key] = orig_value
     end
   else
-    copy = orig
+    copy_obj = orig
   end
-  return copy
+  return copy_obj
+end
+
+local function append_table(dst, src)
+  for i = 1, #src do
+    table.insert(dst, src[i])
+  end
 end
 
 local StateAll = torch.class("StateAll")
@@ -87,7 +133,7 @@ function StateAll.next(state)
   return state[#state]
 end
 
-function StateAll.heuristic(state)
+function StateAll.heuristic()
   return 0
 end
 
@@ -99,13 +145,16 @@ function StateAll.print(state)
 end
 
 -- Convert a flat index to a row-column tuple.
-function flat_to_rc(v, flat_index)
+local function flat_to_rc(v, flat_index)
   local row = math.floor((flat_index - 1) / v:size(2)) + 1
   return row, (flat_index - 1) % v:size(2) + 1
 end
 
-function generate_beam(model, initial, K, max_sent_l, source, gold)
+local function generate_beam(K, max_sent_l, source, source_features, gold, gold_features)
+
   --reset decoder initial states
+  local initial = State.initial(START)
+
   if opt.gpuid >= 0 and opt.gpuid2 >= 0 then
     cutorch.setDevice(opt.gpuid)
   end
@@ -114,19 +163,36 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
   local prev_ks = torch.LongTensor(n, K):fill(1)
   -- Current States.
   local next_ys = torch.LongTensor(n, K):fill(1)
+  local next_ys_features = {}
+  if model_opt.num_target_features > 0 then
+    for i = 1, n do
+      table.insert(next_ys_features, {})
+      for j = 1, model_opt.num_target_features do
+        local t
+        if model_opt.target_features_lookup[j] == true then
+          t = torch.DoubleTensor(K):fill(1)
+        else
+          t = torch.DoubleTensor(K, #idx2feature_targ[j]):zero()
+        end
+        table.insert(next_ys_features[i], t)
+      end
+    end
+  end
+
   -- Current Scores.
   local scores = torch.FloatTensor(n, K)
   scores:zero()
   local source_l = math.min(source:size(1), opt.max_sent_l)
-  local attn_argmax = {} -- store attn weights
-  attn_argmax[1] = {}
+  local attn_argmax = {{initial}} -- store attn weights
+  local states = {{initial}} -- store predicted word idx
 
-  local states = {} -- store predicted word idx
-  states[1] = {}
-  for k = 1, 1 do
-    table.insert(states[1], initial)
-    table.insert(attn_argmax[1], initial)
-    next_ys[1][k] = State.next(initial)
+  next_ys[1][1] = State.next(initial)
+  for j = 1, model_opt.num_target_features do
+    if model_opt.target_features_lookup[j] == true then
+      next_ys_features[1][j][1] = UNK
+    else
+      next_ys_features[1][j][1][UNK] = 1
+    end
   end
 
   local source_input
@@ -143,12 +209,16 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
   local context = context_proto[{{}, {1,source_l}}]:clone() -- 1 x source_l x rnn_size
 
   for t = 1, source_l do
-    local encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+    local encoder_input = {source_input[t]}
+    if model_opt.num_source_features > 0 then
+      append_table(encoder_input, source_features[t])
+    end
+    append_table(encoder_input, rnn_state_enc)
     local out = model[1]:forward(encoder_input)
     rnn_state_enc = out
     context[{{},t}]:copy(out[#out])
   end
-  rnn_state_dec = {}
+  local rnn_state_dec = {}
   for i = 1, #init_fwd_dec do
     table.insert(rnn_state_dec, init_fwd_dec[i]:zero())
   end
@@ -167,7 +237,11 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
       rnn_state_enc[i]:zero()
     end
     for t = source_l, 1, -1 do
-      local encoder_input = {source_input[t], table.unpack(rnn_state_enc)}
+      local encoder_input = {source_input[t]}
+      if model_opt.num_source_features > 0 then
+        append_table(encoder_input, source_features[t])
+      end
+      append_table(encoder_input, rnn_state_enc)
       local out = model[4]:forward(encoder_input)
       rnn_state_enc = out
       context[{{},t}]:add(out[#out])
@@ -181,7 +255,9 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
       end
     end
   end
-  if opt.score_gold == 1 then
+
+  local rnn_state_dec_gold
+  if opt.score_gold == 1 and gold ~= nil then
     rnn_state_dec_gold = {}
     for i = 1, #rnn_state_dec do
       table.insert(rnn_state_dec_gold, rnn_state_dec[i][{{1}}]:clone())
@@ -197,17 +273,29 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
     context = context2
   end
 
-  out_float = torch.FloatTensor()
+  local out_float = torch.FloatTensor()
 
   local i = 1
   local done = false
   local max_score = -1e9
   local found_eos = false
+  local end_attn_argmax
+  local end_hyp
+  local end_score
+  local max_hyp
+  local max_attn_argmax
+
+  local feats_hyp = {}
+  for k = 1, K do
+    table.insert(feats_hyp, {})
+  end
+
   while (not done) and (i < n) do
     i = i+1
     states[i] = {}
     attn_argmax[i] = {}
     local decoder_input1
+    local decoder_input1_features
     if model_opt.use_chars_dec == 1 then
       decoder_input1 = word2charidx_targ:index(1, next_ys:narrow(1,i-1,1):squeeze())
     else
@@ -215,13 +303,21 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
       if opt.beam == 1 then
         decoder_input1 = torch.LongTensor({decoder_input1})
       end
+      decoder_input1_features = {}
+      for j = 1, model_opt.num_target_features do
+        table.insert(decoder_input1_features, next_ys_features[i-1][j])
+      end
     end
-    local decoder_input
+    local decoder_input = {decoder_input1}
+    if model_opt.num_target_features > 0 then
+      append_table(decoder_input, decoder_input1_features)
+    end
     if model_opt.attn == 1 then
-      decoder_input = {decoder_input1, context, table.unpack(rnn_state_dec)}
+      append_table(decoder_input, {context})
     else
-      decoder_input = {decoder_input1, context[{{}, source_l}], table.unpack(rnn_state_dec)}
+      append_table(decoder_input, {context[{{}, source_l}]})
     end
+    append_table(decoder_input, rnn_state_dec)
     local out_decoder = model[2]:forward(decoder_input)
     local out_decoder_pred_idx = #out_decoder
     if model_opt.guided_alignment == 1 then
@@ -236,7 +332,11 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
     for j = 1, out_decoder_pred_idx - 1 do
       table.insert(rnn_state_dec, out_decoder[j])
     end
-    out_float:resize(out:size()):copy(out)
+    if type(out) == "table" then
+      out_float:resize(out[1]:size()):copy(out[1])
+    else
+      out_float:resize(out:size()):copy(out)
+    end
     for k = 1, K do
       State.disallow(out_float:select(1, k))
       out_float[k]:add(scores[i-1][k])
@@ -256,7 +356,7 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
     for k = 1, K do
       while true do
         local score, index = flat_out:max(1)
-        local score = score[1]
+        score = score[1]
         local prev_k, y_i = flat_to_rc(out_float, index[1])
         states[i][k] = State.advance(states[i-1][prev_k], y_i)
         local diff = true
@@ -268,8 +368,7 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
 
         if i < 2 or diff then
           if model_opt.attn == 1 then
-            max_attn, max_index = decoder_softmax.output[prev_k]:max(1)
-            attn_argmax[i][k] = State.advance(attn_argmax[i-1][prev_k],max_index[1])
+            attn_argmax[i][k] = State.advance(attn_argmax[i-1][prev_k], decoder_softmax.output[prev_k]:clone())
           end
           prev_ks[i][k] = prev_k
           next_ys[i][k] = y_i
@@ -283,6 +382,35 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
     for j = 1, #rnn_state_dec do
       rnn_state_dec[j]:copy(rnn_state_dec[j]:index(1, prev_ks[i]))
     end
+
+    if model_opt.num_target_features > 0 then
+      for k = 1, K do
+        table.insert(feats_hyp[k], {})
+        for j = 1, model_opt.num_target_features do
+          local lk, idx = torch.sort(out[1+j][k], true)
+          local best = 1
+          local hyp = {}
+          if model_opt.target_features_lookup[j] == true then
+            next_ys_features[i][j][k] = idx[best]
+            hyp[1] = idx[best]
+          else
+            next_ys_features[i][j]:copy(out[1+j])
+            table.insert(hyp, idx[best])
+            for l = best+1, lk:size(1) do
+              if lk[best] - lk[l] < 0.05 then
+                if idx[l] > END then
+                  table.insert(hyp, idx[l])
+                end
+              else
+                break
+              end
+            end
+          end
+          table.insert(feats_hyp[k][i-1], hyp)
+        end
+      end
+    end
+
     end_hyp = states[i][1]
     end_score = scores[i][1]
     if model_opt.attn == 1 then
@@ -308,10 +436,10 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
     end
   end
   local gold_score = 0
-  if opt.score_gold == 1 then
+  if opt.score_gold == 1 and gold ~= nil then
     rnn_state_dec = {}
-    for i = 1, #init_fwd_dec do
-      table.insert(rnn_state_dec, init_fwd_dec[i][{{1}}]:zero())
+    for fwd_i = 1, #init_fwd_dec do
+      table.insert(rnn_state_dec, init_fwd_dec[fwd_i][{{1}}]:zero())
     end
     if model_opt.init_dec == 1 then
       rnn_state_dec = rnn_state_dec_gold
@@ -324,12 +452,16 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
       else
         decoder_input1 = gold[{{t-1}}]
       end
-      local decoder_input
-      if model_opt.attn == 1 then
-        decoder_input = {decoder_input1, context[{{1}}], table.unpack(rnn_state_dec)}
-      else
-        decoder_input = {decoder_input1, context[{{1}, source_l}], table.unpack(rnn_state_dec)}
+      local decoder_input = {decoder_input1}
+      if model_opt.num_target_features > 0 then
+        append_table(decoder_input, gold_features[t-1])
       end
+      if model_opt.attn == 1 then
+        append_table(decoder_input, {context[{{1}}]})
+      else
+        append_table(decoder_input, {context[{{1}, source_l}]})
+      end
+      append_table(decoder_input, rnn_state_dec)
       local out_decoder = model[2]:forward(decoder_input)
       local out = model[3]:forward(out_decoder[#out_decoder]) -- K x vocab_size
       rnn_state_dec = {} -- to be modified later
@@ -339,7 +471,11 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
       for j = 1, #out_decoder - 1 do
         table.insert(rnn_state_dec, out_decoder[j])
       end
-      gold_score = gold_score + out[1][gold[t]]
+      if type(out) == "table" then
+        gold_score = gold_score + out[1][1][gold[t]]
+      else
+        gold_score = gold_score + out[1][gold[t]]
+      end
     end
   end
   if opt.simple == 1 or end_score > max_score or not found_eos then
@@ -348,10 +484,25 @@ function generate_beam(model, initial, K, max_sent_l, source, gold)
     max_attn_argmax = end_attn_argmax
   end
 
-  return max_hyp, max_score, max_attn_argmax, gold_score, states[i], scores[i], attn_argmax[i]
+  local max_feats_hyp = {}
+
+  if model_opt.num_target_features > 0 then
+    for j = 1, i-1 do
+      table.insert(max_feats_hyp, {})
+    end
+
+    -- follow beam path to build the features sequence
+    local k = 1
+    for j = i, 2, -1 do
+      k = prev_ks[j][k]
+      max_feats_hyp[j-1] = feats_hyp[k][j-1]
+    end
+  end
+
+  return max_hyp, max_feats_hyp, max_score, max_attn_argmax, gold_score, states[i], scores[i], attn_argmax[i]
 end
 
-function idx2key(file)
+local function idx2key(file)
   local f = io.open(file,'r')
   local t = {}
   for line in f:lines() do
@@ -364,7 +515,7 @@ function idx2key(file)
   return t
 end
 
-function flip_table(u)
+local function flip_table(u)
   local t = {}
   for key, value in pairs(u) do
     t[value] = key
@@ -372,7 +523,7 @@ function flip_table(u)
   return t
 end
 
-function get_layer(layer)
+local function get_layer(layer)
   if layer.name ~= nil then
     if layer.name == 'decoder_attn' then
       decoder_attn = layer
@@ -388,7 +539,7 @@ function get_layer(layer)
   end
 end
 
-function sent2wordidx(sent, word2idx, start_symbol)
+local function tokens2wordidx(tokens, word2idx, start_symbol)
   local t = {}
   local u = {}
   if start_symbol == 1 then
@@ -396,10 +547,10 @@ function sent2wordidx(sent, word2idx, start_symbol)
     table.insert(u, START_WORD)
   end
 
-  for word in sent:gmatch'([^%s]+)' do
-    local idx = word2idx[word] or UNK
+  for _, token in pairs(tokens) do
+    local idx = word2idx[token.value] or UNK
     table.insert(t, idx)
-    table.insert(u, word)
+    table.insert(u, token.value)
   end
   if start_symbol == 1 then
     table.insert(t, END)
@@ -408,30 +559,69 @@ function sent2wordidx(sent, word2idx, start_symbol)
   return torch.LongTensor(t), u
 end
 
-function sent2charidx(sent, char2idx, max_word_l, start_symbol)
-  local words = {}
-  if start_symbol == 1 then
-    table.insert(words, START_WORD)
+local function get_feature_embedding(values, feature2idx, vocab_size, use_lookup)
+  if use_lookup == true then
+    local t = torch.Tensor(1)
+    t[1] = feature2idx[values[1]]
+    return t
+  else
+    local emb = {}
+    for _ = 1, vocab_size do
+      table.insert(emb, 0)
+    end
+    for i = 1, #values do
+      local idx = feature2idx[values[i]]
+      emb[idx] = 1
+    end
+    return torch.DoubleTensor(emb):view(1,#emb)
   end
-  for word in sent:gmatch'([^%s]+)' do
-    table.insert(words, word)
-  end
-  if start_symbol == 1 then
-    table.insert(words, END_WORD)
-  end
-  local chars = torch.ones(#words, max_word_l)
-  for i = 1, #words do
-    chars[i] = word2charidx(words[i], char2idx, max_word_l, chars[i])
-  end
-  return chars, words
 end
 
-function word2charidx(word, char2idx, max_word_l, t)
+local function features2featureidx(features, feature2idx, idx2feature,
+                                   use_lookup, start_symbol, decoder)
+  local out = {}
+
+  if decoder == 1 then
+    table.insert(out, {})
+    for j = 1, #feature2idx do
+      local emb = get_feature_embedding({UNK_WORD}, feature2idx[j], #idx2feature[j], use_lookup[j])
+      table.insert(out[#out], emb)
+    end
+  end
+
+  if start_symbol == 1 then
+    table.insert(out, {})
+    for j = 1, #feature2idx do
+      local emb = get_feature_embedding({START_WORD}, feature2idx[j], #idx2feature[j], use_lookup[j])
+      table.insert(out[#out], emb)
+    end
+  end
+
+  for i = 1, #features do
+    table.insert(out, {})
+    for j = 1, #feature2idx do
+      local emb = get_feature_embedding(features[i][j], feature2idx[j], #idx2feature[j], use_lookup[j])
+      table.insert(out[#out], emb)
+    end
+  end
+
+  if start_symbol == 1 and decoder == 0 then
+    table.insert(out, {})
+    for j = 1, #feature2idx do
+      local emb = get_feature_embedding({END_WORD}, feature2idx[j], #idx2feature[j], use_lookup[j])
+      table.insert(out[#out], emb)
+    end
+  end
+
+  return out
+end
+
+local function word2charidx(word, chars_idx, max_word_l, t)
   t[1] = START
   local i = 2
   for _, char in utf8.next, word do
     char = utf8.char(char)
-    local char_idx = char2idx[char] or UNK
+    local char_idx = chars_idx[char] or UNK
     t[i] = char_idx
     i = i+1
     if i >= max_word_l then
@@ -445,35 +635,69 @@ function word2charidx(word, char2idx, max_word_l, t)
   return t
 end
 
-function wordidx2sent(sent, idx2word, source_str, attn, skip_end)
-  local t = {}
-  local start_i, end_i
-  skip_end = skip_start_end or true
-  if skip_end then
-    end_i = #sent-1
-  else
-    end_i = #sent
+local function tokens2charidx(tokens, chars_idx, max_word_l, start_symbol)
+  local words = {}
+  if start_symbol == 1 then
+    table.insert(words, START_WORD)
   end
-  for i = 2, end_i do -- skip START and END
-    if sent[i] == UNK then
-      if opt.replace_unk == 1 then
-        local s = source_str[attn[i]]
-        if phrase_table[s] ~= nil then
-          print(s .. ':' ..phrase_table[s])
-        end
-        local r = phrase_table[s] or s
-        table.insert(t, r)
-      else
-        table.insert(t, idx2word[sent[i]])
-      end
-    else
-      table.insert(t, idx2word[sent[i]])
-    end
+
+  for _, token in pairs(tokens) do
+    table.insert(words, token.value)
   end
-  return table.concat(t, ' ')
+  if start_symbol == 1 then
+    table.insert(words, END_WORD)
+  end
+  local chars = torch.ones(#words, max_word_l)
+  for i = 1, #words do
+    chars[i] = word2charidx(words[i], chars_idx, max_word_l, chars[i])
+  end
+  return chars, words
 end
 
-function clean_sent(sent)
+local function wordidx2tokens(sent, features, idx2word, idx2feature, source_words, attn)
+  local tokens = {}
+  local pos = 0
+
+  for i = 2, #sent-1 do -- skip START and END
+    local fields = {}
+    if sent[i] == UNK and opt.replace_unk == 1 then
+      -- retrieve source word with max attention
+      local _, max_index = attn[i]:max(1)
+      local s = source_words[max_index[1]]
+
+      if phrase_table[s] ~= nil then
+        print('Unknown token "' .. s .. '" replaced by source token "' ..phrase_table[s] .. '"')
+      end
+      local r = phrase_table[s] or s
+      table.insert(fields, r)
+    else
+      table.insert(fields, idx2word[sent[i]])
+    end
+    for j = 1, model_opt.num_target_features do
+      local values = {}
+      for k = 1, #features[i][j] do
+        table.insert(values, idx2feature[j][features[i][j][k]])
+      end
+      local values_str = table.concat(values, ',')
+      table.insert(fields, values_str)
+    end
+
+    local token_value = table.concat(fields, '-|-')
+    table.insert(tokens, {
+      value = token_value,
+      range = {
+        begin = pos,
+        ['end'] = pos + string.len(token_value)
+      },
+      attention = attn[i]
+    })
+    pos = pos + string.len(token_value) + 1
+  end
+
+  return tokens
+end
+
+local function clean_sent(sent)
   local s = stringx.replace(sent, UNK_WORD, '')
   s = stringx.replace(s, START_WORD, '')
   s = stringx.replace(s, END_WORD, '')
@@ -482,11 +706,37 @@ function clean_sent(sent)
   return s
 end
 
-function strip(s)
+local function strip(s)
   return s:gsub("^%s+",""):gsub("%s+$","")
 end
 
-function buildAbsolutePaths(resourcesDir)
+local function extract_features(tokens)
+  local cleaned_tokens = {}
+  local features = {}
+
+  for _, entry in pairs(tokens) do
+    local field = entry.value:split('%-|%-')
+    local word = clean_sent(field[1])
+    if string.len(word) > 0 then
+      local cleaned_token = copy(entry)
+      cleaned_token.value = word
+      table.insert(cleaned_tokens, cleaned_token)
+
+      if #field > 1 then
+        table.insert(features, {})
+      end
+
+      for i= 2, #field do
+        local values = field[i]:split(',')
+        table.insert(features[#features], values)
+      end
+    end
+  end
+
+  return cleaned_tokens, features
+end
+
+local function build_absolute_paths(resourcesDir)
   local function isempty(s)
     return s == nil or s == ''
   end
@@ -516,17 +766,11 @@ function buildAbsolutePaths(resourcesDir)
   end
 end
 
-function init(arg, resourcesDir)
+local function init(arg, resourcesDir)
   -- parse input params
   opt = cmd:parse(arg)
 
-  -- some globals
-  PAD = 1; UNK = 2; START = 3; END = 4
-  PAD_WORD = '<blank>'; UNK_WORD = '<unk>'; START_WORD = '<s>'; END_WORD = '</s>'
-  START_CHAR = '{'; END_CHAR = '}'
-  MAX_SENT_L = opt.max_sent_l
-
-   buildAbsolutePaths(resourcesDir)
+  build_absolute_paths(resourcesDir)
   assert(path.exists(opt.model), 'model does not exist')
 
   if opt.gpuid >= 0 then
@@ -537,7 +781,7 @@ function init(arg, resourcesDir)
     end
   end
   print('loading ' .. opt.model .. '...')
-  checkpoint = torch.load(opt.model)
+  local checkpoint = torch.load(opt.model)
   print('done!')
 
   if opt.replace_unk == 1 then
@@ -560,35 +804,53 @@ function init(arg, resourcesDir)
   model_opt.brnn = model_opt.brnn or 0
   model_opt.input_feed = model_opt.input_feed or 1
   model_opt.attn = model_opt.attn or 1
+  model_opt.num_source_features = model_opt.num_source_features or 0
+  model_opt.num_target_features = model_opt.num_target_features or 0
+
+
+  if model_opt.source_features_lookup == nil then
+    model_opt.source_features_lookup = {}
+    for _ = 1, model_opt.num_source_features do
+      table.insert(model_opt.source_features_lookup, false)
+    end
+    model_opt.target_features_lookup = {}
+    for _ = 1, model_opt.num_target_features do
+      table.insert(model_opt.target_features_lookup, false)
+    end
+  end
 
   idx2word_src = idx2key(opt.src_dict)
   word2idx_src = flip_table(idx2word_src)
   idx2word_targ = idx2key(opt.targ_dict)
   word2idx_targ = flip_table(idx2word_targ)
 
+  idx2feature_src = {}
+  feature2idx_src = {}
+  idx2feature_targ = {}
+  feature2idx_targ = {}
+
+  for i = 1, model_opt.num_source_features do
+    table.insert(idx2feature_src, idx2key(opt.feature_dict_prefix .. '.source_feature_' .. i .. '.dict'))
+    table.insert(feature2idx_src, flip_table(idx2feature_src[i]))
+  end
+  for i = 1, model_opt.num_target_features do
+    table.insert(idx2feature_targ, idx2key(opt.feature_dict_prefix .. '.target_feature_' .. i .. '.dict'))
+    table.insert(feature2idx_targ, flip_table(idx2feature_targ[i]))
+  end
+
   -- load character dictionaries if needed
   if model_opt.use_chars_enc == 1 or model_opt.use_chars_dec == 1 then
     utf8 = require 'lua-utf8'
     char2idx = flip_table(idx2key(opt.char_dict))
     model[1]:apply(get_layer)
-  end
-  if model_opt.use_chars_dec == 1 then
-    word2charidx_targ = torch.LongTensor(#idx2word_targ, model_opt.max_word_l):fill(PAD)
-    for i = 1, #idx2word_targ do
-      word2charidx_targ[i] = word2charidx(idx2word_targ[i], char2idx,
-        model_opt.max_word_l, word2charidx_targ[i])
+
+    if model_opt.use_chars_dec == 1 then
+      word2charidx_targ = torch.LongTensor(#idx2word_targ, model_opt.max_word_l):fill(PAD)
+      for i = 1, #idx2word_targ do
+        word2charidx_targ[i] = word2charidx(idx2word_targ[i], char2idx,
+          model_opt.max_word_l, word2charidx_targ[i])
+      end
     end
-  end
-  -- load gold labels if it exists
-  if path.exists(opt.targ_file) then
-    print('loading GOLD labels at ' .. opt.targ_file)
-    gold = {}
-    local file = io.open(opt.targ_file, 'r')
-    for line in file:lines() do
-      table.insert(gold, line)
-    end
-  else
-    opt.score_gold = 0
   end
 
   if opt.gpuid >= 0 then
@@ -608,13 +870,14 @@ function init(arg, resourcesDir)
 
   softmax_layers = {}
   model[2]:apply(get_layer)
+  local attn_layer
   if model_opt.attn == 1 then
     decoder_attn:apply(get_layer)
     decoder_softmax = softmax_layers[1]
-    attn_layer = torch.zeros(opt.beam, MAX_SENT_L)
+    attn_layer = torch.zeros(opt.beam, opt.max_sent_l)
   end
 
-  context_proto = torch.zeros(1, MAX_SENT_L, model_opt.rnn_size)
+  context_proto = torch.zeros(1, opt.max_sent_l, model_opt.rnn_size)
   local h_init_dec = torch.zeros(opt.beam, model_opt.rnn_size)
   local h_init_enc = torch.zeros(1, model_opt.rnn_size)
   if opt.gpuid >= 0 then
@@ -625,88 +888,113 @@ function init(arg, resourcesDir)
       cutorch.setDevice(opt.gpuid)
       context_proto = context_proto:cuda()
       cutorch.setDevice(opt.gpuid2)
-      context_proto2 = torch.zeros(opt.beam, MAX_SENT_L, model_opt.rnn_size):cuda()
+      context_proto2 = torch.zeros(opt.beam, opt.max_sent_l, model_opt.rnn_size):cuda()
     else
       context_proto = context_proto:cuda()
     end
     if model_opt.attn == 1 then
-      attn_layer = attn_layer:cuda()
+      attn_layer:cuda()
     end
   end
   init_fwd_enc = {}
-  init_fwd_dec = {} -- initial context
+  init_fwd_dec = {}
   if model_opt.input_feed == 1 then
     table.insert(init_fwd_dec, h_init_dec:clone())
   end
 
-  for L = 1, model_opt.num_layers do
+  for _ = 1, model_opt.num_layers do
     table.insert(init_fwd_enc, h_init_enc:clone())
     table.insert(init_fwd_enc, h_init_enc:clone())
     table.insert(init_fwd_dec, h_init_dec:clone()) -- memory cell
     table.insert(init_fwd_dec, h_init_dec:clone()) -- hidden state
   end
 
-  pred_score_total = 0
-  gold_score_total = 0
-  pred_words_total = 0
-  gold_words_total = 0
-
   State = StateAll
-  sent_id = 0
 end
 
-function search(line)
-  sent_id = sent_id + 1
-  line = clean_sent(line)
-  print('SENT ' .. sent_id .. ': ' ..line)
+
+--[[
+  @table token
+
+  @field value - token value (word)
+  @field [attention] - attention tensor used for predicting the token
+  @field [range] - token range:
+    {
+      begin = <begin char index>,
+      end = <end char index (not including)>
+    }
+]]
+
+--[[
+  @function search
+  @brief Performs a beam search.
+
+  @param tokens - array of input tokens
+  @param gold - array of reference tokens for calculating gold scores
+  @return pred_tokens - array of predicted tokens
+  @return info - table containing various info:
+    {
+      pred_score = <prediction score>,
+      pred_words = <prediction words count>,
+      gold_score = <gold score>,
+      gold_words = <gold words count>,
+      nbests = [
+        {
+          tokens = <array of tokens>,
+          score = <prediction score>
+        }
+      ]
+    }
+]]
+local function search(tokens, gold)
+  local cleaned_tokens, source_features_str = extract_features(tokens)
   local source, source_str
+  local source_features = features2featureidx(source_features_str, feature2idx_src, idx2feature_src, model_opt.source_features_lookup, model_opt.start_symbol, 0)
   if model_opt.use_chars_enc == 0 then
-    source, source_str = sent2wordidx(line, word2idx_src, model_opt.start_symbol)
+    source, source_str = tokens2wordidx(cleaned_tokens, word2idx_src, model_opt.start_symbol)
   else
-    source, source_str = sent2charidx(line, char2idx, model_opt.max_word_l, model_opt.start_symbol)
+    source, source_str = tokens2charidx(cleaned_tokens, char2idx, model_opt.max_word_l, model_opt.start_symbol)
   end
-  if opt.score_gold == 1 then
-    target, target_str = sent2wordidx(gold[sent_id], word2idx_targ, 1)
-  end
-  state = State.initial(START)
-  pred, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(model,
-    state, opt.beam, MAX_SENT_L, source, target)
-  pred_score_total = pred_score_total + pred_score
-  pred_words_total = pred_words_total + #pred - 1
-  pred_sent = wordidx2sent(pred, idx2word_targ, source_str, attn, true)
 
-  print('PRED ' .. sent_id .. ': ' .. pred_sent)
+  local target
+  local target_features
   if gold ~= nil then
-    print('GOLD ' .. sent_id .. ': ' .. gold[sent_id])
-    if opt.score_gold == 1 then
-      print(string.format("PRED SCORE: %.4f, GOLD SCORE: %.4f", pred_score, gold_score))
-      gold_score_total = gold_score_total + gold_score
-      gold_words_total = gold_words_total + target:size(1) - 1
-    end
+    local gold_tokens, target_features_str = extract_features(gold)
+    target = tokens2wordidx(gold_tokens, word2idx_targ, 1)
+    target_features = features2featureidx(target_features_str, feature2idx_targ, idx2feature_targ, model_opt.target_features_lookup, 1, 1)
   end
 
-  nbests = {}
+  local pred, pred_features, pred_score, attn, gold_score, all_sents, all_scores, all_attn = generate_beam(
+    opt.beam, opt.max_sent_l, source, source_features, target, target_features)
 
-  if opt.n_best > 1 then
+  local pred_tokens = wordidx2tokens(pred, pred_features, idx2word_targ, idx2feature_targ, source_str, attn)
+
+  local info = {
+    nbests = {},
+    pred_score = pred_score,
+    pred_words = #pred - 1
+  }
+
+  if gold ~= nil then
+    info.gold_score = gold_score
+    info.gold_words = target:size(1) - 1
+  end
+
+  if opt.n_best > 1 and model_opt.num_target_features == 0 then
     for n = 1, opt.n_best do
-      pred_sent_n = wordidx2sent(all_sents[n], idx2word_targ, source_str, all_attn[n], false)
-      local out_n = string.format("%d ||| %s ||| %.4f", n, pred_sent_n, all_scores[n])
-      print(out_n)
-      nbests[n] = out_n
+      local pred_tokens_n = wordidx2tokens(all_sents[n], pred_features, idx2word_targ, idx2feature_targ, source_str, all_attn[n])
+      table.insert(info.nbests, {
+        tokens = pred_tokens_n,
+        score = all_scores[n]
+      })
     end
   end
 
-  print('')
-
-  return pred_sent, nbests
-end
-
-function getOptions()
-  return opt
+  return pred_tokens, info
 end
 
 return {
   init = init,
   search = search,
-  getOptions = getOptions
+  getOptions = function() return opt end
 }

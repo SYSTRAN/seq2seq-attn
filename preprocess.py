@@ -10,6 +10,8 @@ import argparse
 import numpy as np
 import h5py
 import itertools
+import math
+import re
 from collections import defaultdict
 
 class Indexer:
@@ -20,6 +22,7 @@ class Indexer:
         self.BOS = symbols[2]
         self.EOS = symbols[3]
         self.d = {self.PAD: 1, self.UNK: 2, self.BOS: 3, self.EOS: 4}
+        self.max_num_values = 0
 
     def add_w(self, ws):
         for w in ws:
@@ -43,10 +46,7 @@ class Indexer:
         items = [(v, k) for k, v in self.d.iteritems()]
         items.sort()
         for v, k in items:
-            if chars == 1:
-                print >>out, k.encode('utf-8'), v
-            else:
-                print >>out, k, v
+            print >>out, k.encode('utf-8'), v #always keep utf8 encode/decode
         out.close()
 
     def prune_vocab(self, k):
@@ -61,10 +61,7 @@ class Indexer:
     def load_vocab(self, vocab_file, chars=0):
         self.d = {}
         for line in open(vocab_file, 'r'):
-            if chars == 1:
-                v, k = line.decode("utf-8").strip().split()
-            else:
-                v, k = line.strip().split()
+            v, k = line.decode("utf-8").strip().split() #always keep utf8 encode/decode
             self.d[v] = int(k)
 
 def pad(ls, length, symbol):
@@ -72,88 +69,191 @@ def pad(ls, length, symbol):
         return ls[:length]
     return ls + [symbol] * (length -len(ls))
 
+def save_features(name, indexers, outputfile):
+    if len(indexers) > 0:
+        print("Number of additional features on {} side: {}".format(name, len(indexers)))
+    for i in range(len(indexers)):
+        indexers[i].write(outputfile + "." + name + "_feature_" + str(i+1) + ".dict", )
+        print(" * {} feature {} of size: {} (maximal number of values per word: {})".format(name, i+1, len(indexers[i].d), indexers[i].max_num_values))
+
+def load_features(name, indexers, outputfile):
+    for i in range(len(indexers)):
+        indexers[i].load_vocab(outputfile + "." + name + "_feature_" + str(i+1) + ".dict", )
+        print(" * {} feature {} of size: {} (maximal number of values per word: {})".format(name, i+1, len(indexers[i].d), indexers[i].max_num_values))
+
 def get_data(args):
+    int_max_size = 31
+    src_feature_indexers = []
     src_indexer = Indexer(["<blank>","<unk>","<s>","</s>"])
     target_indexer = Indexer(["<blank>","<unk>","<s>","</s>"])
+    target_feature_indexers = []
     char_indexer = Indexer(["<blank>","<unk>","{","}"])
     char_indexer.add_w([src_indexer.PAD, src_indexer.UNK, src_indexer.BOS, src_indexer.EOS])
 
-    def make_vocab(srcfile, targetfile, seqlength, max_word_l=0, chars=0):
+    def init_feature_indexers(indexers, count):
+        for i in range(count):
+            indexers.append(Indexer(["<blank>","<unk>","<s>","</s>"]))
+
+    def load_sentence(sent, indexers):
+        sent_seq = sent.strip().split()
+        sent_words = ''
+        sent_features = []
+
+        for entry in sent_seq:
+            fields = entry.split('-|-')
+            word = fields[0]
+            sent_words += (' ' if sent_words else '') + word
+
+            if len(fields) > 1:
+                count = len(fields) - 1
+                if len(sent_features) == 0:
+                    sent_features = [ [] for i in range(count) ]
+                if len(indexers) == 0:
+                    init_feature_indexers(indexers, count)
+
+                for i in range(1, len(fields)):
+                    values = fields[i].split(',')
+                    indexers[i-1].max_num_values = max(len(values), indexers[i-1].max_num_values)
+                    sent_features[i-1].append(values)
+
+        return sent_words, sent_features
+
+    def add_features_vocab(orig_features, indexers):
+        if len(indexers) > 0:
+            index = 0
+            for features in orig_features:
+                for values in features:
+                    indexers[index].add_w(values)
+                index += 1
+
+    def make_vocab(srcfile, targetfile, seqlength, max_word_l=0, chars=0, train=1):
         num_sents = 0
         for _, (src_orig, targ_orig) in \
                 enumerate(itertools.izip(open(srcfile,'r'), open(targetfile,'r'))):
-            if chars == 1:
-                src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
-                targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
-            else:
-                src_orig = src_indexer.clean(src_orig.strip())
-                targ_orig = target_indexer.clean(targ_orig.strip())
+            src_orig, src_orig_features = load_sentence(src_orig, src_feature_indexers)
+            targ_orig, targ_orig_features = load_sentence(targ_orig, target_feature_indexers)
+            src_orig = src_indexer.clean(src_orig.decode("utf-8").strip()) #always keep utf8 encode/decode
+            targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip()) #always keep utf8 encode/decode
             targ = targ_orig.strip().split()
             src = src_orig.strip().split()
             if len(targ) > seqlength or len(src) > seqlength or len(targ) < 1 or len(src) < 1:
                 continue
             num_sents += 1
-            for word in targ:
-                if chars == 1:
-                    word = char_indexer.clean(word)
-                    if len(word) == 0:
-                        continue
-                    max_word_l = max(len(word)+2, max_word_l)
-                    for char in list(word):
-                        char_indexer.vocab[char] += 1
-                target_indexer.vocab[word] += 1
+            if train == 1:
+                for word in targ:
+                    if chars == 1:
+                        word = char_indexer.clean(word)
+                        if len(word) == 0:
+                            continue
+                        max_word_l = max(len(word)+2, max_word_l)
+                        for char in list(word):
+                            char_indexer.vocab[char] += 1
+                    target_indexer.vocab[word] += 1
 
-            for word in src:
-                if chars == 1:
-                    word = char_indexer.clean(word)
-                    if len(word) == 0:
-                        continue
-                    max_word_l = max(len(word)+2, max_word_l)
-                    for char in list(word):
-                        char_indexer.vocab[char] += 1
-                src_indexer.vocab[word] += 1
+                add_features_vocab(src_orig_features, src_feature_indexers)
+                add_features_vocab(targ_orig_features, target_feature_indexers)
+
+                for word in src:
+                    if chars == 1:
+                        word = char_indexer.clean(word)
+                        if len(word) == 0:
+                            continue
+                        max_word_l = max(len(word)+2, max_word_l)
+                        for char in list(word):
+                            char_indexer.vocab[char] += 1
+                    src_indexer.vocab[word] += 1
 
         return max_word_l, num_sents
 
-    def convert(srcfile, targetfile, alignmentfile, batchsize, seqlength, outfile, num_sents,
+    def convert(srcfile, targetfile, alignfile, alignpattern, storealign, batchsize, seqlength, outfile, num_sents,
                 max_word_l, max_sent_l=0,chars=0, unkfilter=0, shuffle=0):
 
+        def init_features_tensor(indexers):
+            return [ np.zeros((num_sents,
+                               newseqlength,
+                               int(math.ceil(len(indexers[i].d)/float(int_max_size)))), dtype=int)
+                     for i in range(len(indexers)) ]
+
+        def values_to_identifier(values, vocab_size):
+            binary = [ 1 if k+1 in values else 0 for k in range(vocab_size) ]
+            splitted = [ binary[i:i+int_max_size] if i+int_max_size < vocab_size else binary[i:]
+                         for i in range(0, vocab_size, int_max_size) ]
+            values = []
+            for k in range(len(splitted)):
+                value = 0
+                for i in range(len(splitted[k])):
+                    value += splitted[k][i] * (2**i)
+                values.append(value)
+            return values
+
+        def load_features(orig_features, indexers, seqlength):
+            if len(orig_features) == 0:
+                return None
+
+            features = []
+            for i in range(len(orig_features)):
+                features.append([[indexers[i].UNK]] + [[indexers[i].BOS]]
+                                + orig_features[i] + [[indexers[i].EOS]])
+
+            for i in range(len(features)):
+                features[i] = pad(features[i], seqlength+1, [indexers[i].PAD])
+                for j in range(len(features[i])):
+                    features[i][j] = indexers[i].convert_sequence(features[i][j])
+                    identifier = values_to_identifier(features[i][j], len(indexers[i].d))
+                    features[i][j] = identifier
+                features[i] = np.array(features[i], dtype=int)
+            return features
+
         newseqlength = seqlength + 2 #add 2 for EOS and BOS
+
+        alignfile_hdl = None
+        alignments = None
+        if not alignfile == '':
+            alignfile_hdl = open(alignfile,'r')
+            if storealign == 1:
+                alignments = np.zeros((num_sents,newseqlength,newseqlength), dtype=np.uint8)
+        alignpattern_re = re.compile(alignpattern)
+
         targets = np.zeros((num_sents, newseqlength), dtype=int)
+        targets_features = init_features_tensor(target_feature_indexers)
+        targets_features_output = init_features_tensor(target_feature_indexers)
         target_output = np.zeros((num_sents, newseqlength), dtype=int)
         sources = np.zeros((num_sents, newseqlength), dtype=int)
-        if len(alignmentfile) > 0:
-            alignments = np.zeros((num_sents,newseqlength,newseqlength), dtype=np.uint8)
-            alignment_origs = open(alignmentfile, 'r')
-        else:
-            alignments = None
-            alignment_origs = None
+        sources_features = init_features_tensor(src_feature_indexers)
         source_lengths = np.zeros((num_sents,), dtype=int)
         target_lengths = np.zeros((num_sents,), dtype=int)
         if chars==1:
             sources_char = np.zeros((num_sents, newseqlength, max_word_l), dtype=int)
             targets_char = np.zeros((num_sents, newseqlength, max_word_l), dtype=int)
         dropped = 0
+        dropped_align = 0
+        dropped_length = 0
+        dropped_unk = 0
         sent_id = 0
         for _, (src_orig, targ_orig) in \
                 enumerate(itertools.izip(open(srcfile,'r'), open(targetfile,'r'))):
-            if chars == 1:
-                src_orig = src_indexer.clean(src_orig.decode("utf-8").strip())
-                targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip())
-            else:
-                src_orig = src_indexer.clean(src_orig.strip())
-                targ_orig = target_indexer.clean(targ_orig.strip())
-            targ = [target_indexer.BOS] + targ_orig.strip().split() + [target_indexer.EOS]
-            src =  [src_indexer.BOS] + src_orig.strip().split() + [src_indexer.EOS]
-            max_sent_l = max(len(targ), len(src), max_sent_l)
-            if len(targ) > newseqlength or len(src) > newseqlength or len(targ) < 3 or len(src) < 3:
+            src_orig, src_orig_features = load_sentence(src_orig, src_feature_indexers)
+            targ_orig, targ_orig_features = load_sentence(targ_orig, target_feature_indexers)
+
+            src_orig = src_indexer.clean(src_orig.decode("utf-8").strip()) #always keep utf8 encode/decode
+            targ_orig = target_indexer.clean(targ_orig.decode("utf-8").strip()) #always keep utf8 encode/decode
+
+            targw = [target_indexer.BOS] + targ_orig.strip().split() + [target_indexer.EOS]
+            srcw =  [src_indexer.BOS] + src_orig.strip().split() + [src_indexer.EOS]
+            max_sent_l = max(len(targw), len(srcw), max_sent_l)
+            if len(targw) > newseqlength or len(srcw) > newseqlength or len(targw) < 3 or len(srcw) < 3:
                 dropped += 1
-                if alignments is not None:
-                    alignment_orig = alignment_origs.readline()
+                dropped_length += 1
+                print "DROP LEN\t"+src_orig.encode("utf-8").strip()+"\n"+targ_orig.encode("utf-8").strip()+"\t" #always keep utf8 encode/decode
+
+           
+                # skip align file
+                if alignfile_hdl: alignfile_hdl.readline()
                 continue
-            targ = pad(targ, newseqlength+1, target_indexer.PAD)
+
+            targw = pad(targw, newseqlength+1, target_indexer.PAD)
             targ_char = []
-            for word in targ:
+            for word in targw:
                 if chars == 1:
                     word = char_indexer.clean(word)
                 #use UNK for target, but not for source
@@ -165,12 +265,13 @@ def get_data(args):
                         char[-1] = char_indexer.EOS
                     char_idx = char_indexer.convert_sequence(pad(char, max_word_l, char_indexer.PAD))
                     targ_char.append(char_idx)
-            targ = target_indexer.convert_sequence(targ)
+
+            targ = target_indexer.convert_sequence(targw)
             targ = np.array(targ, dtype=int)
 
-            src = pad(src, newseqlength, src_indexer.PAD)
+            srcw = pad(srcw, newseqlength, src_indexer.PAD)
             src_char = []
-            for word in src:
+            for word in srcw:
                 if chars == 1:
                     word = char_indexer.clean(word)
                     char = [char_indexer.BOS] + list(word) + [char_indexer.EOS]
@@ -179,8 +280,45 @@ def get_data(args):
                         char[-1] = char_indexer.EOS
                     char_idx = char_indexer.convert_sequence(pad(char, max_word_l, char_indexer.PAD))
                     src_char.append(char_idx)
-            src = src_indexer.convert_sequence(src)
+
+            src = src_indexer.convert_sequence(srcw)
             src = np.array(src, dtype=int)
+
+            align=[]
+
+            if alignfile_hdl:
+                align=alignfile_hdl.readline().strip().split(" ")
+                if not alignpattern == '':
+	                protectsrc = []
+	                protecttarg = []
+	                for i in xrange(len(src)):
+	                    srcword=srcw[i]
+	                    if src[i] == 2:
+	                        srcword = src_indexer.UNK
+	                    protectsrc.append(not(alignpattern_re.match(srcword)==None))
+	                for i in xrange(len(targ)):
+	                    targword=targw[i]
+	                    if targ[i] == 2:
+	                        targword = target_indexer.UNK
+	                    protecttarg.append(not(alignpattern_re.match(targword)==None))
+	                keep = True
+	                for pair in align:
+	                    srcidx,targidx=pair.split("-")
+	                    srcword = srcw[int(srcidx)+1]
+	                    targword = targw[int(targidx)+1]
+	                    if src[int(srcidx)+1] == 2:
+	                        srcword = "<unk>"
+	                    if targ[int(targidx)+1] == 2:
+	                        targword = "<unk>"
+	                    if srcword == targword:
+	                        # at least one match validating alignment
+	                        protectsrc[int(srcidx)+1]=False
+	                        protecttarg[int(targidx)+1]=False
+	                if sum(protecttarg) or sum(protectsrc):
+	                    print ("DROP ALIGN\t"+src_orig.strip()+"\t"+targ_orig).encode("utf-8")
+	                    dropped += 1
+	                    dropped_align += 1
+	                    continue
 
             if unkfilter > 0:
                 targ_unks = float((targ[:-1] == 2).sum())
@@ -190,8 +328,8 @@ def get_data(args):
                     src_unks = src_unks/(len(src)-2)
                 if targ_unks > unkfilter or src_unks > unkfilter:
                     dropped += 1
-                    if alignments is not None:
-                        alignment_orig = alignment_origs.readline()
+                    dropped_unk += 1
+                    print "DROP UNK\t"+src_orig.encode("utf-8")+"\n"+targ_orig.encode("utf-8").strip()+"\t"
                     continue
 
             targets[sent_id] = np.array(targ[:-1],dtype=int)
@@ -204,17 +342,21 @@ def get_data(args):
             if chars == 1:
                 sources_char[sent_id] = np.array(src_char, dtype=int)
 
-            if alignments is not None:
-                alignment_orig = alignment_origs.readline()
-                if alignment_orig == '':
-                    print("Warning: alignment file {} reached premature end at {}".format(alignmentfile, sent_id))
-                for align in alignment_orig.strip().split():
-                    aFrom, aTo = align.split('-')
+            source_features = load_features(src_orig_features, src_feature_indexers, newseqlength)
+            target_features = load_features(targ_orig_features, target_feature_indexers, newseqlength+1)
+
+            for i in range(len(target_feature_indexers)):
+                targets_features[i][sent_id] = np.array(target_features[i][:-2], dtype=int)
+                targets_features_output[i][sent_id] = np.array(target_features[i][1:-1], dtype=int)
+            for i in range(len(src_feature_indexers)):
+                sources_features[i][sent_id] = np.array(source_features[i][1:], dtype=int)
+
+            if alignfile_hdl and storealign:
+                for pair in align:
+                    aFrom, aTo = pair.split('-')
                     aFrom = int(aFrom)
                     aTo = int(aTo)
                     alignments[sent_id][aFrom + 1][aTo + 1] = 1
-#                    print("{}: {}-{}".format(sent_id,aFrom,aTo))
-#                print(alignments[sent_id])
 
             sent_id += 1
             if sent_id % 100000 == 0:
@@ -230,6 +372,10 @@ def get_data(args):
                 alignments = alignments[rand_idx]
             source_lengths = source_lengths[rand_idx]
             target_lengths = target_lengths[rand_idx]
+            for i in range(len(sources_features)):
+                sources_features[i] = sources_features[i][rand_idx]
+                targets_features[i] = targets_features[i][rand_idx]
+                targets_features_output[i] = targets_features_output[i][rand_idx]
             if chars==1:
                 sources_char = sources_char[rand_idx]
                 targets_char = targets_char[rand_idx]
@@ -245,6 +391,12 @@ def get_data(args):
             alignments = alignments[source_sort]
         target_l = target_lengths[source_sort]
         source_l = source_lengths[source_sort]
+
+        for i in range(len(src_feature_indexers)):
+            sources_features[i] = sources_features[i][source_sort]
+        for i in range(len(target_feature_indexers)):
+            targets_features[i] = targets_features[i][source_sort]
+            targets_features_output[i] = targets_features_output[i][source_sort]
 
         curr_l = 0
         l_location = [] #idx where sent length changes
@@ -288,6 +440,18 @@ def get_data(args):
         f["target_nonzeros"] = np.array(nonzeros, dtype=int)
         f["source_size"] = np.array([len(src_indexer.d)])
         f["target_size"] = np.array([len(target_indexer.d)])
+        f["num_source_features"] = np.array([len(src_feature_indexers)])
+        f["num_target_features"] = np.array([len(target_feature_indexers)])
+        f["identifier_max_size"] = np.array([int_max_size])
+        for i in range(len(src_feature_indexers)):
+            f["source_feature_" + str(i+1)] = sources_features[i]
+            f["source_feature_" + str(i+1) + "_size"] = np.array([len(src_feature_indexers[i].d)])
+            f["source_feature_" + str(i+1) + "_max_values"] = np.array([src_feature_indexers[i].max_num_values])
+        for i in range(len(target_feature_indexers)):
+            f["target_feature_" + str(i+1)] = targets_features[i]
+            f["target_feature_output_" + str(i+1)] = targets_features_output[i]
+            f["target_feature_" + str(i+1) + "_size"] = np.array([len(target_feature_indexers[i].d)])
+            f["target_feature_" + str(i+1) + "_max_values"] = np.array([target_feature_indexers[i].max_num_values])
         if chars == 1:
             del sources, targets, target_output
             sources_char = sources_char[source_sort]
@@ -296,17 +460,18 @@ def get_data(args):
             targets_char = targets_char[source_sort]
             f["target_char"] = targets_char
             f["char_size"] = np.array([len(char_indexer.d)])
-        print("Saved {} sentences (dropped {} due to length/unk filter)".format(
-            len(f["source"]), dropped))
+        print("Saved {} sentences (dropped {} due to length [{}]/unk [{}]/align [{}] filter)".format(
+            len(f["source"]), dropped, dropped_length, dropped_unk, dropped_align))
         f.close()
         return max_sent_l
 
     print("First pass through data to get vocab...")
     max_word_l, num_sents_train = make_vocab(args.srcfile, args.targetfile,
                                              args.seqlength, 0, args.chars)
+
     print("Number of sentences in training: {}".format(num_sents_train))
     max_word_l, num_sents_valid = make_vocab(args.srcvalfile, args.targetvalfile,
-                                             args.seqlength, max_word_l, args.chars)
+                                             args.seqlength, max_word_l, args.chars, 0)
     print("Number of sentences in valid: {}".format(num_sents_valid))
     if args.chars == 1:
         print("Max word length (before cutting): {}".format(max_word_l))
@@ -334,16 +499,25 @@ def get_data(args):
         char_indexer.write(args.outputfile + ".char.dict", args.chars)
         print("Character vocab size: {}".format(len(char_indexer.vocab)))
 
+    if args.reusefeaturefile != '':
+        load_features('source', src_feature_indexers, args.reusefeaturefile)
+        load_features('target', target_feature_indexers, args.reusefeaturefile)
+
+    save_features('source', src_feature_indexers, args.outputfile)
+    save_features('target', target_feature_indexers, args.outputfile)
+
     print("Source vocab size: Original = {}, Pruned = {}".format(len(src_indexer.vocab),
                                                           len(src_indexer.d)))
     print("Target vocab size: Original = {}, Pruned = {}".format(len(target_indexer.vocab),
                                                           len(target_indexer.d)))
 
     max_sent_l = 0
-    max_sent_l = convert(args.srcvalfile, args.targetvalfile, args.alignmentvalfile, args.batchsize, args.seqlength,
+    max_sent_l = convert(args.srcvalfile, args.targetvalfile, args.alignvalfile, args.alignpattern, args.storealign,
+                         args.batchsize, args.seqlength,
                          args.outputfile + "-val.hdf5", num_sents_valid,
                          max_word_l, max_sent_l, args.chars, args.unkfilter, args.shuffle)
-    max_sent_l = convert(args.srcfile, args.targetfile, args.alignmentfile, args.batchsize, args.seqlength,
+    max_sent_l = convert(args.srcfile, args.targetfile, args.alignfile, args.alignpattern, args.storealign,
+                         args.batchsize, args.seqlength,
                          args.outputfile + "-train.hdf5", num_sents_train, max_word_l,
                          max_sent_l, args.chars, args.unkfilter, args.shuffle)
 
@@ -367,13 +541,8 @@ def main(arguments):
     parser.add_argument('--targetfile', help="Path to target training data, "
                                            "where each line represents a single "
                                            "source/target sequence.", required=True)
-    parser.add_argument('--alignmentfile', help="Path to source-to-target alignment of training data, "
-                                           "where each line represents a set of alignments "
-                                           "per train instance.", required=False, default='')
     parser.add_argument('--srcvalfile', help="Path to source validation data.", required=True)
     parser.add_argument('--targetvalfile', help="Path to target validation data.", required=True)
-    parser.add_argument('--alignmentvalfile', help="Path to source-to-target alignment of validation data",
-                                           required=False, default='')
     parser.add_argument('--batchsize', help="Size of each minibatch.", type=int, default=64)
     parser.add_argument('--seqlength', help="Maximum sequence length. Sequences longer "
                                                "than this are dropped.", type=int, default=50)
@@ -400,9 +569,23 @@ def main(arguments):
                                        "Can be an absolute count limit (if > 1) "
                                        "or a proportional limit (0 < unkfilter < 1).",
                                           type = float, default = 0)
+    parser.add_argument('--reusefeaturefile', help="use existing feature vocabs",
+                                          type = str, default ='')
     parser.add_argument('--shuffle', help="If = 1, shuffle sentences before sorting (based on  "
                                            "source length).",
                                           type = int, default = 0)
+    parser.add_argument('--alignfile', help="Path to source-to-target alignment of training data, "
+                                           "where each line represents a set of alignments "
+                                           "per train instance.",
+                                           type = str, required=False, default='')
+    parser.add_argument('--alignvalfile', help="Path to source-to-target alignment of validation data",
+                                           type = str, required=False, default='')
+    parser.add_argument('--alignpattern', help="regular expression of patterns to align; "
+                                          "if set, use alignment file to filter out sentence with mis-aligned patterns in train and validation corpora",
+                                          type = str, default = r'^<unk>$')
+    parser.add_argument('--storealign', help="If 1, store alignment information in hdf5 (e.g. for guided alignment)",
+                                          type = int, required=False, default=0)
+
 
     args = parser.parse_args(arguments)
     get_data(args)
