@@ -157,10 +157,15 @@ function make_lstm(data, opt, model, use_chars)
   if model == 'dec' then
     local top_h = outputs[#outputs]
     local decoder_out
+    local attn_output
     if opt.attn == 1 then
       local decoder_attn = make_decoder_attn(data, opt)
       decoder_attn.name = 'decoder_attn'
-      decoder_out = decoder_attn({top_h, inputs[2+num_features]})
+      if opt.guided_alignment == 1 then
+        decoder_out, attn_output = decoder_attn({top_h, inputs[2+num_features]}):split(2)
+      else
+        decoder_out = decoder_attn({top_h, inputs[2+num_features]})
+      end
     else
       decoder_out = nn.JoinTable(2)({top_h, inputs[2+num_features]})
       decoder_out = nn.Tanh()(nn.LinearNoBias(opt.rnn_size*2, opt.rnn_size)(decoder_out))
@@ -170,6 +175,9 @@ function make_lstm(data, opt, model, use_chars)
                                                    (decoder_out)
     end
     table.insert(outputs, decoder_out)
+    if opt.guided_alignment == 1 then
+      table.insert(outputs, attn_output)
+    end
   end
   return nn.gModule(inputs, outputs)
 end
@@ -194,6 +202,12 @@ function make_decoder_attn(data, opt, simple)
   local softmax_attn = nn.SoftMax()
   softmax_attn.name = 'softmax_attn'
   attn = softmax_attn(attn)
+
+  local attn_output
+  if opt.guided_alignment == 1 then
+    attn_output = attn
+  end
+
   attn = nn.Replicate(1,2)(attn) -- batch_l x 1 x source_l
 
   -- apply attention to context
@@ -219,7 +233,12 @@ function make_decoder_attn(data, opt, simple)
                                                 {{opt.max_batch_l, opt.rnn_size}, {opt.max_batch_l, opt.rnn_size}})
                                    ({context_combined,inputs[1]})
   end
-  return nn.gModule(inputs, {context_output})
+
+  if opt.guided_alignment == 1 then
+    return nn.gModule(inputs, {context_output, attn_output})
+  else
+    return nn.gModule(inputs, {context_output})
+  end
 end
 
 function make_generator(data, opt)

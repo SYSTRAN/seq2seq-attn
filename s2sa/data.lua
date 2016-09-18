@@ -165,6 +165,11 @@ function data:__init(opt, data_file)
   self.source_size = f:read('source_size'):all()[1]
   self.target_nonzeros = f:read('target_nonzeros'):all()
 
+  if opt.guided_alignment == 1 then
+    self.alignment = f:read('alignment'):all()
+    self.alignment = torch.FloatTensor(self.alignment:size()):copy(self.alignment)
+  end
+
   if opt.use_chars_enc == 1 then
     self.source_char = f:read('source_char'):all()
     self.char_size = f:read('char_size'):all()[1]
@@ -249,6 +254,13 @@ function data:__init(opt, data_file)
     target_features_i = features_per_timestep(target_feats)
     target_features_output_i = features_per_timestep(target_feats_output)
 
+    local alignment_i
+    if opt.guided_alignment == 1 then
+      alignment_i = self.alignment:sub(self.batch_idx[i], self.batch_idx[i]+self.batch_l[i]-1,
+                                         1, self.source_l[i], 
+                                         1, self.target_l[i])
+    end
+
     table.insert(self.batches, {target_i,
         target_output_i,
         self.target_nonzeros[i],
@@ -259,7 +271,8 @@ function data:__init(opt, data_file)
         target_l_i,
         source_features_i,
         target_features_i,
-        target_features_output_i})
+        target_features_output_i,
+        alignment_i})
   end
 end
 
@@ -279,6 +292,7 @@ function data.__index(self, idx)
     local target_l = self.batches[idx][6]
     local source_l = self.batches[idx][7]
     local target_l_all = self.batches[idx][8]
+
     local source_features = generate_vecs(self.batches[idx][9],
                                           self.source_features_size,
                                           self.source_features_use_lookup,
@@ -291,6 +305,9 @@ function data.__index(self, idx)
                                                  self.target_features_size,
                                                  self.target_features_use_lookup,
                                                  self.identifier_max_size)
+
+    local alignment = self.batches[idx][12]
+
     if opt.gpuid >= 0 then --if multi-gpu, source lives in gpuid1, rest on gpuid2
       cutorch.setDevice(opt.gpuid)
       source_input = source_input:cuda()
@@ -303,10 +320,15 @@ function data.__index(self, idx)
       target_l_all = target_l_all:cuda()
       target_features = features_on_gpu(target_features)
       target_features_output = features_on_gpu(target_features_output)
+      -- criterion is on gpuid2
+      if opt.guided_alignment == 1 then
+        alignment = alignment:cuda()
+      end
     end
+
     return {target_input, target_output, nonzeros, source_input,
       batch_l, target_l, source_l, target_l_all,
-      source_features, target_features, target_features_output}
+      source_features, target_features, target_features_output, alignment}
   end
 end
 

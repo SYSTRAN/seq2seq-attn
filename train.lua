@@ -53,6 +53,12 @@ cmd:option('-res_net', 0, [[Use residual connections between LSTM stacks whereby
                           added with the l-2th LSTM layer. We didn't find this to help in our
                           experiments]])
 
+cmd:option('-guided_alignment', 0, [[If 1, use external alignments to guide the attention weights as in
+                          (Chen et al., Guided Alignment Training for Topic-Aware Neural Machine Translation,
+                          arXiv 2016.). Alignments should have been provided during preprocess]])
+
+cmd:option('-guided_alignment_weight', 0.5, [[default weights for external alignments]])
+
 cmd:text("")
 cmd:text("Below options only apply if using the character model.")
 cmd:text("")
@@ -237,8 +243,10 @@ function train(train_data, valid_data)
   end
 
   local h_init = torch.zeros(opt.max_batch_l, opt.rnn_size)
+  local attn_init = torch.zeros(opt.max_batch_l, opt.max_sent_l)
   if opt.gpuid >= 0 then
     h_init = h_init:cuda()
+    attn_init = attn_init:cuda()
     cutorch.setDevice(opt.gpuid)
     if opt.gpuid2 >= 0 then
       encoder_grad_proto2 = encoder_grad_proto2:cuda()
@@ -351,6 +359,7 @@ function train(train_data, valid_data)
     opt.target_features_lookup = data.target_features_use_lookup
     local train_nonzeros = 0
     local train_loss = 0
+    local train_loss_cll = 0
     local batch_order = torch.randperm(data.length) -- shuffle mini batch order
     local start_time = timer:time().real
     local num_words_target = 0
@@ -367,6 +376,8 @@ function train(train_data, valid_data)
       local target, target_out, nonzeros, source = d[1], d[2], d[3], d[4]
       local batch_l, target_l, source_l = d[5], d[6], d[7]
       local source_features, target_features, target_features_out = d[9], d[10], d[11]
+      local alignment = d[12]
+
       local encoder_grads = encoder_grad_proto[{{1, batch_l}, {1, source_l}}]
       local encoder_bwd_grads
       if opt.brnn == 1 then
@@ -429,6 +440,7 @@ function train(train_data, valid_data)
       end
       -- forward prop decoder
       local preds = {}
+      local attn_outputs = {}
       local decoder_input
       for t = 1, target_l do
         decoder_clones[t]:training()
@@ -443,12 +455,17 @@ function train(train_data, valid_data)
         end
         append_table(decoder_input, rnn_state_dec[t-1])
         local out = decoder_clones[t]:forward(decoder_input)
-        local next_state = {}
-        table.insert(preds, out[#out])
-        if opt.input_feed == 1 then
-          table.insert(next_state, out[#out])
+        local out_pred_idx = #out
+        if opt.guided_alignment == 1 then
+          out_pred_idx = #out-1
+          table.insert(attn_outputs, out[#out])
         end
-        for j = 1, #out-1 do
+        local next_state = {}
+        table.insert(preds, out[out_pred_idx])
+        if opt.input_feed == 1 then
+          table.insert(next_state, out[out_pred_idx])
+        end
+        for j = 1, out_pred_idx-1 do
           table.insert(next_state, out[j])
         end
         rnn_state_dec[t] = next_state
@@ -461,22 +478,60 @@ function train(train_data, valid_data)
       end
 
       local drnn_state_dec = reset_state(init_bwd_dec, batch_l)
+      if opt.guided_alignment == 1 then
+        attn_init:zero()
+        table.insert(drnn_state_dec, attn_init[{{1, batch_l}, {1, source_l}}])
+      end
       local loss = 0
+      local loss_cll = 0
       for t = target_l, 1, -1 do
         local pred = generator:forward(preds[t])
+
+        local input = pred
         local output
         if data.num_target_features > 0 then
           output = {target_out[t], table.unpack(target_features_out[t])}
         else
           output = {target_out[t]}
         end
-        loss = loss + criterion:forward(pred, output)/batch_l
-        local dl_dpred = criterion:backward(pred, output)
+
+        local A
+        if opt.guided_alignment == 1 then
+          -- Alignment should sum to unit length (the set of attention weights of a target word should sum to 1)
+          A = torch.cdiv(alignment[{{},{},t}],
+                        nn.Replicate(alignment[{{},{},t}]:size(2),2):cuda():forward(torch.sum(alignment[{{},{},t}],2):squeeze(2)))
+          A[A:ne(A)] = 0
+          input={input, attn_outputs[t]}
+          output={output, A}
+        end
+
+        loss = loss + criterion:forward(input, output)/batch_l
+
+        local drnn_state_attn
+        local dl_dpred
+        if opt.guided_alignment == 1 then
+          local dl_dpred_attn = criterion:backward(input, output)
+          dl_dpred = dl_dpred_attn[1]
+          drnn_state_attn = dl_dpred_attn[2]
+          drnn_state_attn:div(batch_l)
+          loss_cll = loss_cll + cll_criterion:forward(input[1], output[1])/batch_l
+        else
+          dl_dpred = criterion:backward(input, output)
+        end
+
         for k = 1, #dl_dpred do
           dl_dpred[k]:div(batch_l)
         end
+        
         local dl_dtarget = generator:backward(preds[t], dl_dpred)
-        drnn_state_dec[#drnn_state_dec]:add(dl_dtarget)
+        
+        local rnn_state_dec_pred_idx = #drnn_state_dec
+        if opt.guided_alignment == 1 then
+          rnn_state_dec_pred_idx = #drnn_state_dec-1
+          drnn_state_dec[#drnn_state_dec]:add(drnn_state_attn)
+        end
+        drnn_state_dec[rnn_state_dec_pred_idx]:add(dl_dtarget)
+
         local decoder_input = {target[t]}
         if data.num_target_features > 0 then
           append_table(decoder_input, target_features[t])
@@ -500,10 +555,15 @@ function train(train_data, valid_data)
             encoder_bwd_grads[{{}, 1}]:add(dlst[2+data.num_target_features])
           end
         end
-        drnn_state_dec[#drnn_state_dec]:zero()
+
+        drnn_state_dec[rnn_state_dec_pred_idx]:zero()
+        if opt.guided_alignment == 1 then
+          drnn_state_dec[#drnn_state_dec]:zero()
+        end          
         if opt.input_feed == 1 then
-          drnn_state_dec[#drnn_state_dec]:add(dlst[3+data.num_target_features])
+          drnn_state_dec[rnn_state_dec_pred_idx]:add(dlst[3+data.num_target_features])
         end
+
         local offset = dec_offset+data.num_target_features
         for j = offset, #dlst do
           drnn_state_dec[j-offset+1]:copy(dlst[j])
@@ -639,12 +699,21 @@ function train(train_data, valid_data)
       num_words_source = num_words_source + batch_l*source_l
       train_nonzeros = train_nonzeros + nonzeros
       train_loss = train_loss + loss*batch_l
+      if opt.guided_alignment == 1 then
+        train_loss_cll = train_loss_cll + loss_cll*batch_l
+      end
       local time_taken = timer:time().real - start_time
       if i % opt.print_every == 0 then
         local stats = string.format('Epoch: %d, Batch: %d/%d, Batch size: %d, LR: %.4f, ',
           epoch, i, data:size(), batch_l, opt.learning_rate)
-        stats = stats .. string.format('PPL: %.2f, |Param|: %.2f, |GParam|: %.2f, ',
-          math.exp(train_loss/train_nonzeros), param_norm, grad_norm)
+        
+        if opt.guided_alignment == 1 then
+          stats = stats .. string.format('PPL: %.2f, PPL_CLL: %.2f, |Param|: %.2f, |GParam|: %.2f, ',
+            math.exp(train_loss/train_nonzeros), math.exp(train_loss_cll/train_nonzeros), param_norm, grad_norm)
+        else
+          stats = stats .. string.format('PPL: %.2f, |Param|: %.2f, |GParam|: %.2f, ',
+            math.exp(train_loss/train_nonzeros), param_norm, grad_norm)
+        end
         stats = stats .. string.format('Training: %d/%d/%d total/source/target tokens/sec',
           (num_words_target+num_words_source) / time_taken,
           num_words_source / time_taken,
@@ -655,10 +724,15 @@ function train(train_data, valid_data)
         collectgarbage()
       end
     end
-    return train_loss, train_nonzeros
+    
+    if opt.guided_alignment == 1 then
+        return train_loss, train_nonzeros, train_loss_cll
+    else
+      return train_loss, train_nonzeros
+    end
   end
 
-  local total_loss, total_nonzeros, batch_loss, batch_nonzeros
+  local total_loss, total_nonzeros, batch_loss, batch_nonzeros, total_loss_cll, batch_loss_cll
   for epoch = opt.start_epoch, opt.epochs do
     generator:training()
     if opt.num_shards > 0 then
@@ -669,14 +743,24 @@ function train(train_data, valid_data)
         local fn = train_data .. '.' .. shard_order[s] .. '.hdf5'
         print('loading shard #' .. shard_order[s])
         local shard_data = data.new(opt, fn)
-        batch_loss, batch_nonzeros = train_batch(shard_data, epoch)
+        if opt.guided_alignment == 1 then
+          batch_loss, batch_nonzeros, batch_loss_cll = train_batch(shard_data, epoch)
+          total_loss_cll = total_loss_cll + batch_loss_cll
+        else
+          batch_loss, batch_nonzeros = train_batch(shard_data, epoch)
+        end
         total_loss = total_loss + batch_loss
         total_nonzeros = total_nonzeros + batch_nonzeros
       end
     else
-      total_loss, total_nonzeros = train_batch(train_data, epoch)
+      if opt.guided_alignment == 1 then
+        total_loss, total_nonzeros, total_loss_cll = train_batch(train_data, epoch)
+      else
+        total_loss, total_nonzeros = train_batch(train_data, epoch)
+      end
     end
     local train_score = math.exp(total_loss/total_nonzeros)
+    -- TODO train_score_cll
     print('Train', train_score)
     opt.train_perf[#opt.train_perf + 1] = train_score
     local score = eval(valid_data)
@@ -717,12 +801,15 @@ function eval(data)
   end
 
   local nll = 0
+  local nll_cll = 0
   local total = 0
   for i = 1, data:size() do
     local d = data[i]
     local target, target_out, nonzeros, source = d[1], d[2], d[3], d[4]
     local batch_l, target_l, source_l = d[5], d[6], d[7]
     local source_features, target_features, target_features_out = d[9], d[10], d[11]
+    local alignment = d[12]
+    
     if opt.gpuid >= 0 and opt.gpuid2 >= 0 then
       cutorch.setDevice(opt.gpuid)
     end
@@ -776,6 +863,8 @@ function eval(data)
     end
 
     local loss = 0
+    local loss_cll = 0
+    local attn_outputs = {}
     for t = 1, target_l do
       local decoder_input = {target[t]}
       if data.num_target_features > 0 then
@@ -788,14 +877,26 @@ function eval(data)
       end
       append_table(decoder_input, rnn_state_dec)
       local out = decoder_clones[1]:forward(decoder_input)
+      
+      local out_pred_idx = #out
+      if opt.guided_alignment == 1 then
+        out_pred_idx = #out-1
+        table.insert(attn_outputs, out[#out])
+      end
+
       rnn_state_dec = {}
       if opt.input_feed == 1 then
-        table.insert(rnn_state_dec, out[#out])
+        table.insert(rnn_state_dec, out[out_pred_idx])      
       end
-      for j = 1, #out-1 do
+
+      for j = 1, out_pred_idx-1 do
         table.insert(rnn_state_dec, out[j])
       end
-      local pred = generator:forward(out[#out])
+
+
+      local pred = generator:forward(out[out_pred_idx])
+
+      local input = pred
       local output
       if data.num_target_features > 0 then
         output = {target_out[t], table.unpack(target_features_out[t])}
@@ -803,13 +904,34 @@ function eval(data)
         output = {target_out[t]}
       end
 
-      loss = loss + criterion:forward(pred, output)
+      local A
+      if opt.guided_alignment == 1 then
+        -- Alignment should sum to unit length (the set of attention weights of a target word should sum to 1)
+        A = torch.cdiv(alignment[{{},{},t}],
+                      nn.Replicate(alignment[{{},{},t}]:size(2),2):cuda():forward(torch.sum(alignment[{{},{},t}],2):squeeze(2)))
+        A[A:ne(A)] = 0
+        input={input, attn_outputs[t]}
+        output={output, A}
+      end
+
+      loss = loss + criterion:forward(input, output)
+
+      if opt.guided_alignment == 1 then
+        loss_cll = loss_cll + cll_criterion:forward(input[1], output[1])
+      end
     end
     nll = nll + loss
+    if opt.guided_alignment == 1 then
+      nll_cll = nll_cll + loss_cll
+    end
     total = total + nonzeros
   end
   local valid = math.exp(nll / total)
   print("Valid", valid)
+  if opt.guided_alignment == 1 then
+    local valid_cll = math.exp(nll_cll / total)
+    print("Valid_cll", valid_cll)
+  end
   collectgarbage()
   return valid
 end
@@ -907,6 +1029,14 @@ function main()
       encoder_bwd = model[4]:double()
     end
     _, criterion = make_generator(valid_data, opt)
+  end
+
+  if opt.guided_alignment == 1 then
+    cll_criterion = criterion
+    criterion = nn.ParallelCriterion()
+    criterion:add(cll_criterion, (1-opt.guided_alignment_weight))
+    -- sum of binary reconstruction loss over all input/output pair; averaged
+    criterion:add(nn.MSECriterion(), opt.guided_alignment_weight)
   end
 
   layers = {encoder, decoder, generator}

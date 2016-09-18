@@ -165,7 +165,7 @@ def get_data(args):
 
         return max_word_l, num_sents
 
-    def convert(srcfile, targetfile, alignfile, alignpattern, batchsize, seqlength, outfile, num_sents,
+    def convert(srcfile, targetfile, alignfile, alignpattern, storealign, batchsize, seqlength, outfile, num_sents,
                 max_word_l, max_sent_l=0,chars=0, unkfilter=0, shuffle=0):
 
         def init_features_tensor(indexers):
@@ -204,12 +204,16 @@ def get_data(args):
                 features[i] = np.array(features[i], dtype=int)
             return features
 
+        newseqlength = seqlength + 2 #add 2 for EOS and BOS
+
         alignfile_hdl = None
+        alignments = None
         if not alignfile == '':
             alignfile_hdl = open(alignfile,'r')
+            if storealign == 1:
+                alignments = np.zeros((num_sents,newseqlength,newseqlength), dtype=np.uint8)
         alignpattern_re = re.compile(alignpattern)
 
-        newseqlength = seqlength + 2 #add 2 for EOS and BOS
         targets = np.zeros((num_sents, newseqlength), dtype=int)
         targets_features = init_features_tensor(target_feature_indexers)
         targets_features_output = init_features_tensor(target_feature_indexers)
@@ -280,38 +284,41 @@ def get_data(args):
             src = src_indexer.convert_sequence(srcw)
             src = np.array(src, dtype=int)
 
+            align=[]
+
             if alignfile_hdl:
-                protectsrc = []
-                protecttarg = []
-                for i in xrange(len(src)):
-                    srcword=srcw[i]
-                    if src[i] == 2:
-                        srcword = src_indexer.UNK
-                    protectsrc.append(not(alignpattern_re.match(srcword)==None))
-                for i in xrange(len(targ)):
-                    targword=targw[i]
-                    if targ[i] == 2:
-                        targword = target_indexer.UNK
-                    protecttarg.append(not(alignpattern_re.match(targword)==None))
                 align=alignfile_hdl.readline().strip().split(" ")
-                keep = True
-                for pair in align:
-                    srcidx,targidx=pair.split("-")
-                    srcword = srcw[int(srcidx)+1]
-                    targword = targw[int(targidx)+1]
-                    if src[int(srcidx)+1] == 2:
-                        srcword = "<unk>"
-                    if targ[int(targidx)+1] == 2:
-                        targword = "<unk>"
-                    if srcword == targword:
-                        # at least one match validating alignment
-                        protectsrc[int(srcidx)+1]=False
-                        protecttarg[int(targidx)+1]=False
-                if sum(protecttarg) or sum(protectsrc):
-                    print ("DROP ALIGN\t"+src_orig.strip()+"\t"+targ_orig).encode("utf-8")
-                    dropped += 1
-                    dropped_align += 1
-                    continue
+                if not alignpattern == '':
+	                protectsrc = []
+	                protecttarg = []
+	                for i in xrange(len(src)):
+	                    srcword=srcw[i]
+	                    if src[i] == 2:
+	                        srcword = src_indexer.UNK
+	                    protectsrc.append(not(alignpattern_re.match(srcword)==None))
+	                for i in xrange(len(targ)):
+	                    targword=targw[i]
+	                    if targ[i] == 2:
+	                        targword = target_indexer.UNK
+	                    protecttarg.append(not(alignpattern_re.match(targword)==None))
+	                keep = True
+	                for pair in align:
+	                    srcidx,targidx=pair.split("-")
+	                    srcword = srcw[int(srcidx)+1]
+	                    targword = targw[int(targidx)+1]
+	                    if src[int(srcidx)+1] == 2:
+	                        srcword = "<unk>"
+	                    if targ[int(targidx)+1] == 2:
+	                        targword = "<unk>"
+	                    if srcword == targword:
+	                        # at least one match validating alignment
+	                        protectsrc[int(srcidx)+1]=False
+	                        protecttarg[int(targidx)+1]=False
+	                if sum(protecttarg) or sum(protectsrc):
+	                    print ("DROP ALIGN\t"+src_orig.strip()+"\t"+targ_orig).encode("utf-8")
+	                    dropped += 1
+	                    dropped_align += 1
+	                    continue
 
             if unkfilter > 0:
                 targ_unks = float((targ[:-1] == 2).sum())
@@ -344,6 +351,13 @@ def get_data(args):
             for i in range(len(src_feature_indexers)):
                 sources_features[i][sent_id] = np.array(source_features[i][1:], dtype=int)
 
+            if alignfile_hdl and storealign:
+                for pair in align:
+                    aFrom, aTo = pair.split('-')
+                    aFrom = int(aFrom)
+                    aTo = int(aTo)
+                    alignments[sent_id][aFrom + 1][aTo + 1] = 1
+
             sent_id += 1
             if sent_id % 100000 == 0:
                 print("{}/{} sentences processed".format(sent_id, num_sents))
@@ -354,6 +368,8 @@ def get_data(args):
             targets = targets[rand_idx]
             target_output = target_output[rand_idx]
             sources = sources[rand_idx]
+            if alignments is not None:
+                alignments = alignments[rand_idx]
             source_lengths = source_lengths[rand_idx]
             target_lengths = target_lengths[rand_idx]
             for i in range(len(sources_features)):
@@ -371,6 +387,8 @@ def get_data(args):
         sources = sources[source_sort]
         targets = targets[source_sort]
         target_output = target_output[source_sort]
+        if alignments is not None:
+            alignments = alignments[source_sort]
         target_l = target_lengths[source_sort]
         source_l = source_lengths[source_sort]
 
@@ -412,6 +430,8 @@ def get_data(args):
         f["source"] = sources
         f["target"] = targets
         f["target_output"] = target_output
+        if alignments is not None:
+            f["alignment"] = alignments
         f["target_l"] = np.array(target_l_max, dtype=int)
         f["target_l_all"] = target_l
         f["batch_l"] = np.array(batch_l, dtype=int)
@@ -492,11 +512,11 @@ def get_data(args):
                                                           len(target_indexer.d)))
 
     max_sent_l = 0
-    max_sent_l = convert(args.srcvalfile, args.targetvalfile, args.alignvalfile, args.alignpattern,
+    max_sent_l = convert(args.srcvalfile, args.targetvalfile, args.alignvalfile, args.alignpattern, args.storealign,
                          args.batchsize, args.seqlength,
                          args.outputfile + "-val.hdf5", num_sents_valid,
                          max_word_l, max_sent_l, args.chars, args.unkfilter, args.shuffle)
-    max_sent_l = convert(args.srcfile, args.targetfile, args.alignfile, args.alignpattern,
+    max_sent_l = convert(args.srcfile, args.targetfile, args.alignfile, args.alignpattern, args.storealign,
                          args.batchsize, args.seqlength,
                          args.outputfile + "-train.hdf5", num_sents_train, max_word_l,
                          max_sent_l, args.chars, args.unkfilter, args.shuffle)
@@ -554,12 +574,17 @@ def main(arguments):
     parser.add_argument('--shuffle', help="If = 1, shuffle sentences before sorting (based on  "
                                            "source length).",
                                           type = int, default = 0)
-    parser.add_argument('--alignfile', help="if set, use alignment file to filter out sentence with mis-aligned patterns in train corpus",
-                                          type = str, default = '')
-    parser.add_argument('--alignvalfile', help="if set, use alignment file to filter out sentence with mis-aligned patterns in validation corpus",
-                                          type = str, default = '')
-    parser.add_argument('--alignpattern', help="regular expression of patterns to align",
+    parser.add_argument('--alignfile', help="Path to source-to-target alignment of training data, "
+                                           "where each line represents a set of alignments "
+                                           "per train instance.",
+                                           type = str, required=False, default='')
+    parser.add_argument('--alignvalfile', help="Path to source-to-target alignment of validation data",
+                                           type = str, required=False, default='')
+    parser.add_argument('--alignpattern', help="regular expression of patterns to align; "
+                                          "if set, use alignment file to filter out sentence with mis-aligned patterns in train and validation corpora",
                                           type = str, default = r'^<unk>$')
+    parser.add_argument('--storealign', help="If 1, store alignment information in hdf5 (e.g. for guided alignment)",
+                                          type = int, required=False, default=0)
 
 
     args = parser.parse_args(arguments)
