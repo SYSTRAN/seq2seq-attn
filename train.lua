@@ -497,12 +497,8 @@ function train(train_data, valid_data)
 
         local A
         if opt.guided_alignment == 1 then
-          -- Alignment should sum to unit length (the set of attention weights of a target word should sum to 1)
-          A = torch.cdiv(alignment[{{},{},t}],
-                        nn.Replicate(alignment[{{},{},t}]:size(2),2):cuda():forward(torch.sum(alignment[{{},{},t}],2):squeeze(2)))
-          A[A:ne(A)] = 0
           input={input, attn_outputs[t]}
-          output={output, A}
+          output={output, alignment[{{},{},t}]}
         end
 
         loss = loss + criterion:forward(input, output)/batch_l
@@ -886,7 +882,7 @@ function eval(data)
 
       rnn_state_dec = {}
       if opt.input_feed == 1 then
-        table.insert(rnn_state_dec, out[out_pred_idx])      
+        table.insert(rnn_state_dec, out[out_pred_idx])
       end
 
       for j = 1, out_pred_idx-1 do
@@ -906,12 +902,8 @@ function eval(data)
 
       local A
       if opt.guided_alignment == 1 then
-        -- Alignment should sum to unit length (the set of attention weights of a target word should sum to 1)
-        A = torch.cdiv(alignment[{{},{},t}],
-                      nn.Replicate(alignment[{{},{},t}]:size(2),2):cuda():forward(torch.sum(alignment[{{},{},t}],2):squeeze(2)))
-        A[A:ne(A)] = 0
         input={input, attn_outputs[t]}
-        output={output, A}
+        output={output, alignment[{{},{},t}]}
       end
 
       loss = loss + criterion:forward(input, output)

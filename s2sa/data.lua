@@ -94,6 +94,19 @@ function generate_vecs(features, sizes, use_lookup, id_max_size)
   return data
 end
 
+-- using the sentences id, build the alignment tensor
+function generate_aligns(batch_sent_idx, alignment_cc_colidx, alignment_cc_val, source_l, target_l)
+  local batch_size = batch_sent_idx:size(1)
+  t = torch.Tensor(batch_size, source_l, target_l)
+  for k = 1, batch_size do
+    local sent_idx=batch_sent_idx[k]
+    for i = 0, source_l-1 do
+      t[k][i+1]:copy(alignment_cc_val:narrow(1, alignment_cc_colidx[sent_idx+i]+1, target_l))
+    end
+  end
+  return t
+end
+
 local data = torch.class("data")
 
 function data:__init(opt, data_file)
@@ -166,8 +179,9 @@ function data:__init(opt, data_file)
   self.target_nonzeros = f:read('target_nonzeros'):all()
 
   if opt.guided_alignment == 1 then
-    self.alignment = f:read('alignment'):all()
-    self.alignment = torch.FloatTensor(self.alignment:size()):copy(self.alignment)
+    self.alignment_cc_sentidx = f:read('alignment_cc_sentidx'):all()
+    self.alignment_cc_colidx = f:read('alignment_cc_colidx'):all()
+    self.alignment_cc_val = f:read('alignment_cc_val'):all()
   end
 
   if opt.use_chars_enc == 1 then
@@ -256,9 +270,7 @@ function data:__init(opt, data_file)
 
     local alignment_i
     if opt.guided_alignment == 1 then
-      alignment_i = self.alignment:sub(self.batch_idx[i], self.batch_idx[i]+self.batch_l[i]-1,
-                                         1, self.source_l[i], 
-                                         1, self.target_l[i])
+      alignment_i = self.alignment_cc_sentidx:sub(self.batch_idx[i], self.batch_idx[i]+self.batch_l[i]-1)
     end
 
     table.insert(self.batches, {target_i,
@@ -306,7 +318,11 @@ function data.__index(self, idx)
                                                  self.target_features_use_lookup,
                                                  self.identifier_max_size)
 
-    local alignment = self.batches[idx][12]
+    local alignment = generate_aligns(self.batches[idx][12],
+                                      self.alignment_cc_colidx,
+                                      self.alignment_cc_val,
+                                      source_l,
+                                      target_l)
 
     if opt.gpuid >= 0 then --if multi-gpu, source lives in gpuid1, rest on gpuid2
       cutorch.setDevice(opt.gpuid)

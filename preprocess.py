@@ -431,7 +431,37 @@ def get_data(args):
         f["target"] = targets
         f["target_output"] = target_output
         if alignments is not None:
-            f["alignment"] = alignments
+            print "build alignment structure"
+            alignment_cc_val = []
+            alignment_cc_colidx = []
+            alignment_cc_sentidx = []
+            S={}
+            for k in range(sent_id-1):
+                alignment_cc_sentidx.append(len(alignment_cc_colidx))
+                for i in xrange(0, source_l[k]):
+                    # for word i, build aligment vector as a string for indexing
+                    a=''
+                    nalign=int(alignments[k][i].sum())
+                    # build a string representing the alignment vector
+                    for j in xrange(0, newseqlength):
+                        a=a+chr(ord('0')+nalign*alignments[k][i][j])
+                    # check if we have already built such column
+                    if not a in S:
+                        alignment_cc_colidx.append(len(alignment_cc_val))
+                        S[a]=len(alignment_cc_val)
+                        for j in xrange(0, newseqlength):
+                            if nalign:
+                                alignment_cc_val.append(alignments[k][i][j]/nalign)
+                            else:
+                                alignment_cc_val.append(0)
+                    else:
+                        alignment_cc_colidx.append(S[a])
+
+            assert(len(alignment_cc_colidx)<4294967296)
+            f["alignment_cc_sentidx"] = np.array(alignment_cc_sentidx, dtype=np.uint32)
+            f["alignment_cc_colidx"] = np.array(alignment_cc_colidx, dtype=np.uint32)
+            f["alignment_cc_val"] = np.array(alignment_cc_val, dtype=float)
+
         f["target_l"] = np.array(target_l_max, dtype=int)
         f["target_l_all"] = target_l
         f["batch_l"] = np.array(batch_l, dtype=int)
