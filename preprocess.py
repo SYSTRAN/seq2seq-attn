@@ -166,7 +166,7 @@ def get_data(args):
         return max_word_l, num_sents
 
     def convert(srcfile, targetfile, alignfile, alignpattern, storealign, batchsize, seqlength, outfile, num_sents,
-                max_word_l, max_sent_l=0,chars=0, unkfilter=0, shuffle=0):
+                max_word_l, max_sent_l=0,chars=0, unkfilter=0, shuffle=0, verbose=0):
 
         def init_features_tensor(indexers):
             return [ np.zeros((num_sents,
@@ -244,7 +244,7 @@ def get_data(args):
             if len(targw) > newseqlength or len(srcw) > newseqlength or len(targw) < 3 or len(srcw) < 3:
                 dropped += 1
                 dropped_length += 1
-                print "DROP LEN\t"+src_orig.encode("utf-8").strip()+"\n"+targ_orig.encode("utf-8").strip()+"\t" #always keep utf8 encode/decode
+                if verbose: print "DROP LEN\t"+src_orig.encode("utf-8").strip()+"\n"+targ_orig.encode("utf-8").strip()+"\t" #always keep utf8 encode/decode
 
            
                 # skip align file
@@ -315,7 +315,7 @@ def get_data(args):
 	                        protectsrc[int(srcidx)+1]=False
 	                        protecttarg[int(targidx)+1]=False
 	                if sum(protecttarg) or sum(protectsrc):
-	                    print ("DROP ALIGN\t"+src_orig.strip()+"\t"+targ_orig).encode("utf-8")
+	                    if verbose: print ("DROP ALIGN\t"+src_orig.strip()+"\t"+targ_orig).encode("utf-8")
 	                    dropped += 1
 	                    dropped_align += 1
 	                    continue
@@ -329,7 +329,7 @@ def get_data(args):
                 if targ_unks > unkfilter or src_unks > unkfilter:
                     dropped += 1
                     dropped_unk += 1
-                    print "DROP UNK\t"+src_orig.encode("utf-8")+"\n"+targ_orig.encode("utf-8").strip()+"\t"
+                    if verbose: print "DROP UNK\t"+src_orig.encode("utf-8")+"\n"+targ_orig.encode("utf-8").strip()+"\t"
                     continue
 
             targets[sent_id] = np.array(targ[:-1],dtype=int)
@@ -545,11 +545,11 @@ def get_data(args):
     max_sent_l = convert(args.srcvalfile, args.targetvalfile, args.alignvalfile, args.alignpattern, args.storealign,
                          args.batchsize, args.seqlength,
                          args.outputfile + "-val.hdf5", num_sents_valid,
-                         max_word_l, max_sent_l, args.chars, args.unkfilter, args.shuffle)
+                         max_word_l, max_sent_l, args.chars, args.unkfilter, args.shuffle, args.verbose)
     max_sent_l = convert(args.srcfile, args.targetfile, args.alignfile, args.alignpattern, args.storealign,
                          args.batchsize, args.seqlength,
                          args.outputfile + "-train.hdf5", num_sents_train, max_word_l,
-                         max_sent_l, args.chars, args.unkfilter, args.shuffle)
+                         max_sent_l, args.chars, args.unkfilter, args.shuffle, args.verbose)
 
     print("Max sent length (before dropping): {}".format(max_sent_l))
 
@@ -615,6 +615,9 @@ def main(arguments):
                                           type = str, default = r'^<unk>$')
     parser.add_argument('--storealign', help="If 1, store alignment information in hdf5 (e.g. for guided alignment)",
                                           type = int, required=False, default=0)
+    parser.add_argument('--verbose', help="If 1, dump all dropped sentences",
+                                          type = int, required=False, default=0)
+
 
 
     args = parser.parse_args(arguments)
