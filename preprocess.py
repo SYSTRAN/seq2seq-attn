@@ -451,7 +451,7 @@ def get_data(args):
                         S[a]=len(alignment_cc_val)
                         for j in xrange(0, newseqlength):
                             if nalign:
-                                alignment_cc_val.append(alignments[k][i][j]/nalign)
+                                alignment_cc_val.append(alignments[k][i][j]*1.0/nalign)
                             else:
                                 alignment_cc_val.append(0)
                     else:

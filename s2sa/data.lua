@@ -101,7 +101,7 @@ function generate_aligns(batch_sent_idx, alignment_cc_colidx, alignment_cc_val, 
   for k = 1, batch_size do
     local sent_idx=batch_sent_idx[k]
     for i = 0, source_l-1 do
-      t[k][i+1]:copy(alignment_cc_val:narrow(1, alignment_cc_colidx[sent_idx+i]+1, target_l))
+      t[k][i+1]:copy(alignment_cc_val:narrow(1, alignment_cc_colidx[sent_idx+i+1]+1, target_l))
     end
   end
   return t
