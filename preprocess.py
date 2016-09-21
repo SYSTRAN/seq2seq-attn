@@ -166,7 +166,7 @@ def get_data(args):
         return max_word_l, num_sents
 
     def convert(srcfile, targetfile, alignfile, alignpattern, storealign, batchsize, seqlength, outfile, num_sents,
-                max_word_l, max_sent_l=0,chars=0, unkfilter=0, shuffle=0):
+                max_word_l, max_sent_l=0,chars=0, unkfilter=0, shuffle=0, verbose=0):
 
         def init_features_tensor(indexers):
             return [ np.zeros((num_sents,
@@ -244,9 +244,9 @@ def get_data(args):
             if len(targw) > newseqlength or len(srcw) > newseqlength or len(targw) < 3 or len(srcw) < 3:
                 dropped += 1
                 dropped_length += 1
-                print "DROP LEN\t"+src_orig.encode("utf-8").strip()+"\n"+targ_orig.encode("utf-8").strip()+"\t" #always keep utf8 encode/decode
+                if verbose: print "DROP LEN\t"+src_orig.encode("utf-8").strip()+"\n"+targ_orig.encode("utf-8").strip()+"\t" #always keep utf8 encode/decode
 
-           
+
                 # skip align file
                 if alignfile_hdl: alignfile_hdl.readline()
                 continue
@@ -315,7 +315,7 @@ def get_data(args):
 	                        protectsrc[int(srcidx)+1]=False
 	                        protecttarg[int(targidx)+1]=False
 	                if sum(protecttarg) or sum(protectsrc):
-	                    print ("DROP ALIGN\t"+src_orig.strip()+"\t"+targ_orig).encode("utf-8")
+	                    if verbose: print ("DROP ALIGN\t"+src_orig.strip()+"\t"+targ_orig).encode("utf-8")
 	                    dropped += 1
 	                    dropped_align += 1
 	                    continue
@@ -329,7 +329,7 @@ def get_data(args):
                 if targ_unks > unkfilter or src_unks > unkfilter:
                     dropped += 1
                     dropped_unk += 1
-                    print "DROP UNK\t"+src_orig.encode("utf-8")+"\n"+targ_orig.encode("utf-8").strip()+"\t"
+                    if verbose: print "DROP UNK\t"+src_orig.encode("utf-8")+"\n"+targ_orig.encode("utf-8").strip()+"\t"
                     continue
 
             targets[sent_id] = np.array(targ[:-1],dtype=int)
@@ -431,7 +431,34 @@ def get_data(args):
         f["target"] = targets
         f["target_output"] = target_output
         if alignments is not None:
-            f["alignment"] = alignments
+            print "build alignment structure"
+            alignment_cc_val = []
+            alignment_cc_colidx = []
+            alignment_cc_sentidx = []
+            S={}
+            for k in range(sent_id-1):
+                alignment_cc_sentidx.append(len(alignment_cc_colidx))
+                for i in xrange(0, source_l[k]):
+                    # for word i, build aligment vector as a string for indexing
+                    a=''
+                    maxnalign=0
+                    # build a string representing the alignment vector
+                    for j in xrange(0, newseqlength):
+                        a=a+chr(ord('0')+int(alignments[k][i][j]))
+                    # check if we have already built such column
+                    if not a in S:
+                        alignment_cc_colidx.append(len(alignment_cc_val))
+                        S[a]=len(alignment_cc_val)
+                        for j in xrange(0, newseqlength):
+                            alignment_cc_val.append(alignments[k][i][j])
+                    else:
+                        alignment_cc_colidx.append(S[a])
+
+            assert(len(alignment_cc_colidx)<4294967296)
+            f["alignment_cc_sentidx"] = np.array(alignment_cc_sentidx, dtype=np.uint32)
+            f["alignment_cc_colidx"] = np.array(alignment_cc_colidx, dtype=np.uint32)
+            f["alignment_cc_val"] = np.array(alignment_cc_val, dtype=np.uint8)
+
         f["target_l"] = np.array(target_l_max, dtype=int)
         f["target_l_all"] = target_l
         f["batch_l"] = np.array(batch_l, dtype=int)
@@ -515,11 +542,11 @@ def get_data(args):
     max_sent_l = convert(args.srcvalfile, args.targetvalfile, args.alignvalfile, args.alignpattern, args.storealign,
                          args.batchsize, args.seqlength,
                          args.outputfile + "-val.hdf5", num_sents_valid,
-                         max_word_l, max_sent_l, args.chars, args.unkfilter, args.shuffle)
+                         max_word_l, max_sent_l, args.chars, args.unkfilter, args.shuffle, args.verbose)
     max_sent_l = convert(args.srcfile, args.targetfile, args.alignfile, args.alignpattern, args.storealign,
                          args.batchsize, args.seqlength,
                          args.outputfile + "-train.hdf5", num_sents_train, max_word_l,
-                         max_sent_l, args.chars, args.unkfilter, args.shuffle)
+                         max_sent_l, args.chars, args.unkfilter, args.shuffle, args.verbose)
 
     print("Max sent length (before dropping): {}".format(max_sent_l))
 
@@ -585,6 +612,9 @@ def main(arguments):
                                           type = str, default = r'^<unk>$')
     parser.add_argument('--storealign', help="If 1, store alignment information in hdf5 (e.g. for guided alignment)",
                                           type = int, required=False, default=0)
+    parser.add_argument('--verbose', help="If 1, dump all dropped sentences",
+                                          type = int, required=False, default=0)
+
 
 
     args = parser.parse_args(arguments)
