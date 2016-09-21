@@ -16,8 +16,9 @@ opt = cmd:parse(arg)
 function main()
    print('loading model ' .. opt.model)
    checkpoint = torch.load(opt.model)
-   model, model_opt = checkpoint[1], checkpoint[2]
+   model, model_opt, info = checkpoint[1], checkpoint[2], checkpoint[3]
    print(model_opt)
+   print(info)   
 end
 
 main()
