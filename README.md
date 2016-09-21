@@ -112,6 +112,7 @@ or a proportional limit (0 < unkfilter < 1).
 * `alignfile`, `alignvalfile`: when passing file with symmetrized alignment, sentences where source or
 target words matching 'alignpattern' and not aligned - are skipped.
 * `alignpattern`: regular expression to words checked in the alignment - by default '&lt;unk&gt;'
+* `verbose`: dump details of dropped sentences
 
 #### Training options (`train.lua`)
 **Data options**
