@@ -54,12 +54,12 @@ cmd:option('-res_net', 0, [[Use residual connections between LSTM stacks whereby
                           experiments]])
 
 cmd:option('-guided_alignment', 0, [[If 1, use external alignments to guide the attention weights as in
-                          (Chen et al., Guided Alignment Training for Topic-Aware Neural Machine Translation,
-                          arXiv 2016.). Alignments should have been provided during preprocess]])
+                                   (Chen et al., Guided Alignment Training for Topic-Aware Neural Machine Translation,
+                                   arXiv 2016.). Alignments should have been provided during preprocess]])
 
 cmd:option('-guided_alignment_weight', 0.5, [[default weights for external alignments]])
-cmd:option('-guided_alignment_decay',  1, [[decay rate per epoch for alignment weight - typical with 0.9,
-                    weight will end up at ~30% of its initial value]])
+cmd:option('-guided_alignment_decay', 1, [[decay rate per epoch for alignment weight - typical with 0.9,
+                                         weight will end up at ~30% of its initial value]])
 
 cmd:text("")
 cmd:text("Below options only apply if using the character model.")
