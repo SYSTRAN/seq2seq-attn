@@ -760,7 +760,7 @@ function train(train_data, valid_data)
   end
 
   local total_loss, total_nonzeros, batch_loss, batch_nonzeros, total_loss_cll, batch_loss_cll
-  local epochstartT, epochtokenT
+  local epochstartT, epochtakenT
   local timer = torch.Timer()
   for epoch = opt.start_epoch, opt.epochs do
     epochstartT = timer:time().real
@@ -819,8 +819,10 @@ function train(train_data, valid_data)
       for i = 1, opt.num_target_features do
         table.insert(idx2feature_targ, idx2key(opt.feature_dict_prefix .. '.target_feature_' .. i .. '.dict'))
       end
-    epochtokenT = timer:time().real - epochstartT
-    info = {["LR"] = opt.learning_rate, ["time"] = epochtokenT}
+    end
+    epochtakenT = timer:time().real - epochstartT
+
+    info = {["LR"] = opt.learning_rate, ["time_in_minute"] = epochtakenT / 60}
 
     -- clean and save models
     local savefile = string.format('%s_epoch%.2f_%.2f.t7', opt.savefile, epoch, score)
