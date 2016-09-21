@@ -246,7 +246,7 @@ def get_data(args):
                 dropped_length += 1
                 if verbose: print "DROP LEN\t"+src_orig.encode("utf-8").strip()+"\n"+targ_orig.encode("utf-8").strip()+"\t" #always keep utf8 encode/decode
 
-           
+
                 # skip align file
                 if alignfile_hdl: alignfile_hdl.readline()
                 continue
@@ -441,26 +441,23 @@ def get_data(args):
                 for i in xrange(0, source_l[k]):
                     # for word i, build aligment vector as a string for indexing
                     a=''
-                    nalign=int(alignments[k][i].sum())
+                    maxnalign=0
                     # build a string representing the alignment vector
                     for j in xrange(0, newseqlength):
-                        a=a+chr(ord('0')+nalign*alignments[k][i][j])
+                        a=a+chr(ord('0')+int(alignments[k][i][j]))
                     # check if we have already built such column
                     if not a in S:
                         alignment_cc_colidx.append(len(alignment_cc_val))
                         S[a]=len(alignment_cc_val)
                         for j in xrange(0, newseqlength):
-                            if nalign:
-                                alignment_cc_val.append(alignments[k][i][j]*1.0/nalign)
-                            else:
-                                alignment_cc_val.append(0)
+                            alignment_cc_val.append(alignments[k][i][j])
                     else:
                         alignment_cc_colidx.append(S[a])
 
             assert(len(alignment_cc_colidx)<4294967296)
             f["alignment_cc_sentidx"] = np.array(alignment_cc_sentidx, dtype=np.uint32)
             f["alignment_cc_colidx"] = np.array(alignment_cc_colidx, dtype=np.uint32)
-            f["alignment_cc_val"] = np.array(alignment_cc_val, dtype=float)
+            f["alignment_cc_val"] = np.array(alignment_cc_val, dtype=np.uint8)
 
         f["target_l"] = np.array(target_l_max, dtype=int)
         f["target_l_all"] = target_l

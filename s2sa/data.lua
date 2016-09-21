@@ -101,8 +101,13 @@ function generate_aligns(batch_sent_idx, alignment_cc_colidx, alignment_cc_val, 
   for k = 1, batch_size do
     local sent_idx=batch_sent_idx[k]
     for i = 0, source_l-1 do
-      t[k][i+1]:copy(alignment_cc_val:narrow(1, alignment_cc_colidx[sent_idx+i+1]+1, target_l))
+      t[k][i+1]:copy(alignment_cc_val:narrow(1, alignment_cc_colidx[sent_idx+1+i]+1, target_l))
     end
+  end
+  for j =1, t:size(3) do
+        t[{{},{},j}] = torch.cdiv(t[{{},{},j}],
+                        nn.Replicate(t[{{},{},j}]:size(2),2):forward(torch.sum(t[{{},{},j}],2):squeeze(2)))
+        t[t:ne(t)] = 0
   end
   return t
 end
