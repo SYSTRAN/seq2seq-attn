@@ -98,6 +98,9 @@ end
 
 -- using the sentences id, build the alignment tensor
 function generate_aligns(batch_sent_idx, alignment_cc_colidx, alignment_cc_val, source_l, target_l)
+  if batch_sent_idx == nil then
+    return nil
+  end
   local batch_size = batch_sent_idx:size(1)
   t = torch.Tensor(batch_size, source_l, target_l)
   for k = 1, batch_size do
