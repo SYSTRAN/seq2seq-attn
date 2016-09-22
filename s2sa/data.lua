@@ -2,6 +2,8 @@
 -- Manages encoder/decoder data matrices.
 --
 
+local bit = require ("bit")
+
 function features_per_timestep(features)
   local data = {}
 
