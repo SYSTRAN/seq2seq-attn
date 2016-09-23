@@ -58,7 +58,7 @@ cmd:option('-targ_file', '', [[True target sequence (optional)]])
 cmd:option('-output_file', 'pred.txt', [[Path to output the predictions (each line will be the decoded sequence]])
 cmd:option('-src_dict', 'data/demo.src.dict', [[Path to source vocabulary (*.src.dict file)]])
 cmd:option('-targ_dict', 'data/demo.targ.dict', [[Path to target vocabulary (*.targ.dict file)]])
-cmd:option('-feature_dict_prefix', 'data/demo', [[Prefix of the path to features vocabulary (*.feature_N.dict file)]])
+cmd:option('-feature_dict_prefix', 'data/demo', [[Prefix of the path to features vocabularies (*.feature_N.dict files)]])
 cmd:option('-char_dict', 'data/demo.char.dict', [[If using chars, path to character vocabulary (*.char.dict file)]])
 
 -- beam search options
@@ -562,7 +562,11 @@ end
 local function get_feature_embedding(values, feature2idx, vocab_size, use_lookup)
   if use_lookup == true then
     local t = torch.Tensor(1)
-    t[1] = feature2idx[values[1]]
+    local idx = feature2idx[values[1]]
+    if idx == nil then
+      idx = UNK
+    end
+    t[1] = idx
     return t
   else
     local emb = {}
@@ -571,6 +575,9 @@ local function get_feature_embedding(values, feature2idx, vocab_size, use_lookup
     end
     for i = 1, #values do
       local idx = feature2idx[values[i]]
+      if idx == nil then
+        idx = UNK
+      end
       emb[idx] = 1
     end
     return torch.DoubleTensor(emb):view(1,#emb)
