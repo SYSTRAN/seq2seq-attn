@@ -6,6 +6,17 @@ require 's2sa.data'
 require 's2sa.models'
 require 's2sa.model_utils'
 
+local idx2word_src
+local word2idx_src
+local idx2word_targ
+local word2idx_targ
+local idx2feature_src = {}
+local feature2idx_src = {}
+local idx2feature_targ = {}
+local feature2idx_targ = {}
+local info
+local char2idx
+
 cmd = torch.CmdLine()
 
 -- data files
@@ -820,8 +831,12 @@ function train(train_data, valid_data)
         table.insert(idx2feature_targ, idx2key(opt.feature_dict_prefix .. '.target_feature_' .. i .. '.dict'))
       end
     end
-    epochtakenT = timer:time().real - epochstartT
 
+    if opt.char_dict ~= "" then
+      idx2char = idx2key(opt.char_dict)
+    end
+
+    epochtakenT = timer:time().real - epochstartT
     info = {["LR"] = opt.learning_rate, ["time_in_minute"] = epochtakenT / 60}
 
     -- clean and save models
@@ -830,9 +845,9 @@ function train(train_data, valid_data)
       print('saving checkpoint to ' .. savefile)
       -- clean_layer(generator)
       if opt.brnn == 0 then
-        torch.save(savefile, {{encoder, decoder, generator}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ})
+        torch.save(savefile, {{encoder, decoder, generator}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ, idx2char})
       else
-        torch.save(savefile, {{encoder, decoder, generator, encoder_bwd}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ})
+        torch.save(savefile, {{encoder, decoder, generator, encoder_bwd}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ, idx2char})
       end
     end
   end
@@ -1099,6 +1114,12 @@ function main()
         table.insert(idx2feature_targ, idx2key(opt.feature_dict_prefix .. '.target_feature_' .. i .. '.dict'))
       end
     end
+
+    if opt.char_dict == "" then
+      idx2char = checkpoint[8]
+    else
+      idx2char = idx2key(opt.char_dict)
+    end 
 
     opt.num_layers = model_opt.num_layers
     opt.rnn_size = model_opt.rnn_size

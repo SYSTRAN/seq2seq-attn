@@ -60,7 +60,7 @@ cmd:option('-output_file', 'pred.txt', [[Path to output the predictions (each li
 cmd:option('-src_dict', '', [[Path to source vocabulary (*.src.dict file)]])
 cmd:option('-targ_dict', '', [[Path to target vocabulary (*.targ.dict file)]])
 cmd:option('-feature_dict_prefix', '', [[Prefix of the path to features vocabulary (*.feature_N.dict file)]])
-cmd:option('-char_dict', 'data/demo.char.dict', [[If using chars, path to character vocabulary (*.char.dict file)]])
+cmd:option('-char_dict', '', [[If using chars, path to character vocabulary (*.char.dict file)]])
 
 -- beam search options
 cmd:option('-beam', 5,[[Beam size]])
@@ -825,7 +825,6 @@ local function init(arg, resourcesDir)
   if opt.feature_dict_prefix == "" then
     idx2feature_src = checkpoint[6]
     idx2feature_targ = checkpoint[7]
-
   else
     idx2feature_src = {}
     idx2feature_targ = {}
@@ -842,6 +841,13 @@ local function init(arg, resourcesDir)
   for i = 1, model_opt.num_target_features do
     table.insert(feature2idx_targ, flip_table(idx2feature_targ[i]))
   end
+
+  if opt.char_dict == "" then
+    idx2char = checkpoint[8]
+  else
+    idx2char = idx2key(opt.char_dict)
+  end
+  char2idx = flip_table(idx2char)    
 
   if model_opt.source_features_lookup == nil then
     model_opt.source_features_lookup = {}
