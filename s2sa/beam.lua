@@ -47,6 +47,7 @@ local word_vecs_dec
 local softmax_layers
 local hop_attn
 local char2idx
+local idx2char
 local info
 
 local opt = {}

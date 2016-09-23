@@ -15,7 +15,7 @@ local feature2idx_src = {}
 local idx2feature_targ = {}
 local feature2idx_targ = {}
 local info
-local char2idx
+local idx2char
 
 cmd = torch.CmdLine()
 
@@ -856,10 +856,10 @@ function train(train_data, valid_data)
   -- clean_layer(generator)
   print('saving final model to ' .. savefile)
   if opt.brnn == 0 then
-    torch.save(savefile, {{encoder:double(), decoder:double(), generator:double()}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ})
+    torch.save(savefile, {{encoder:double(), decoder:double(), generator:double()}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ, idx2char})
   else
     torch.save(savefile, {{encoder:double(), decoder:double(), generator:double(),
-          encoder_bwd:double()}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ})
+          encoder_bwd:double()}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ, idx2char})
   end
 end
 
