@@ -597,7 +597,7 @@ def main(arguments):
                                        "Can be an absolute count limit (if > 1) "
                                        "or a proportional limit (0 < unkfilter < 1).",
                                           type = float, default = 0)
-    parser.add_argument('--reusefeaturefile', help="use existing feature vocabs",
+    parser.add_argument('--reusefeaturefile', help="Use existing feature vocabs",
                                           type = str, default ='')
     parser.add_argument('--shuffle', help="If = 1, shuffle sentences before sorting (based on  "
                                            "source length).",

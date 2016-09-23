@@ -179,6 +179,7 @@ learning rate. Recommended settings vary based on `optim`: sgd (`learning_rate =
 set or (ii) epoch has gone past the `start_decay_at` epoch limit.
 * `start_decay_at`: Start decay after this epoch.
 * `curriculum`: For this many epochs, order the minibatches based on source sequence length. (Sometimes setting this to 1 will increase convergence speed).
+* `feature_embeddings_dim_exponent`: If the additional feature takes `N` values, then the embbeding dimension will be set to `N^exponent`.
 * `pre_word_vecs_enc`: If using pretrained word embeddings (on the encoder side), this is the
 path to the *.hdf5 file with the embeddings. The hdf5 should have a single field `word_vecs`,
 which references an array with dimensions vocab size by embedding size. Each row should be a word
@@ -216,6 +217,7 @@ memory increase during the training. When set to 0, it rolls back to original me
 * `output_file`: Path to output the predictions (each line will be the decoded sequence).
 * `src_dict`: Path to source vocabulary (`*.src.dict` file from `preprocess.py`).
 * `targ_dict`: Path to target vocabulary (`*.targ.dict` file from `preprocess.py`).
+* `feature_dict_prefix`: Prefix of the path to the features vocabularies (`*.feature_N.dict` files from `preprocess.py`).
 * `char_dict`: Path to character vocabulary (`*.char.dict` file from `preprocess.py`).
 * `beam`: Beam size (recommend keeping this at 5).
 * `max_sent_l`: Maximum sentence length. If any of the sequences in `srcfile` are longer than this
@@ -247,6 +249,19 @@ format.
 * `gpuid2`: ID if the second GPU (if specified).
 * `cudnn`: If the model was trained with `cudnn`, then this should be set to 1 (otherwise the model
 will fail to load).
+
+#### Using additional input features
+[Linguistic Input Features Improve Neural Machine Translation](https://arxiv.org/abs/1606.02892) (Senrich et al. 2016) shows that translation performance can be increased by using additional input features.
+
+Similarly to this work, you can annotate each word in the **source** text by using the `-|-` separator:
+
+```
+word1-|-feat1-|-feat2 word2-|-feat1-|-feat2
+```
+
+It supports an arbitrary number of features with arbitrary labels. However, all input words must have the **same** number of annotations. See for example `data/src-train-case.txt` which annotates each word with the case information.
+
+To evaluate the model, the option `-feature_dict_prefix` is required on `evaluate.lua` which points to the prefix of the features dictionnaries generated during the preprocessing.
 
 #### Switching between GPU/CPU models
 By default, the model will always save the final model as a CPU model, but it will save the
