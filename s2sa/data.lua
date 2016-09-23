@@ -97,23 +97,25 @@ function generate_vecs(features, sizes, use_lookup, id_max_size)
 end
 
 -- using the sentences id, build the alignment tensor
-function generate_aligns(batch_sent_idx, alignment_cc_colidx, alignment_cc_val, source_l, target_l)
+function generate_aligns(batch_sent_idx, alignment_cc_colidx, alignment_cc_val, source_l, target_l, opt_start_symbol)
   if batch_sent_idx == nil then
     return nil
   end
   local batch_size = batch_sent_idx:size(1)
+
+  local src_offset = 0
+  if opt_start_symbol == 0 then
+    src_offset = 1
+  end
+
   t = torch.Tensor(batch_size, source_l, target_l)
   for k = 1, batch_size do
     local sent_idx=batch_sent_idx[k]
     for i = 0, source_l-1 do
-      t[k][i+1]:copy(alignment_cc_val:narrow(1, alignment_cc_colidx[sent_idx+1+i]+1, target_l))
+      t[k][i+1]:copy(alignment_cc_val:narrow(1, alignment_cc_colidx[sent_idx+1+i+src_offset]+1, target_l))
     end
   end
-  for j =1, t:size(3) do
-        t[{{},{},j}] = torch.cdiv(t[{{},{},j}],
-                        nn.Replicate(t[{{},{},j}]:size(2),2):forward(torch.sum(t[{{},{},j}],2):squeeze(2)))
-        t[t:ne(t)] = 0
-  end
+
   return t
 end
 
@@ -332,7 +334,8 @@ function data.__index(self, idx)
                                       self.alignment_cc_colidx,
                                       self.alignment_cc_val,
                                       source_l,
-                                      target_l)
+                                      target_l,
+                                      opt.start_symbol)
 
     if opt.gpuid >= 0 then --if multi-gpu, source lives in gpuid1, rest on gpuid2
       cutorch.setDevice(opt.gpuid)

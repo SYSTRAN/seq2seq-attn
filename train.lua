@@ -379,6 +379,19 @@ function train(train_data, valid_data)
       local batch_l, target_l, source_l = d[5], d[6], d[7]
       local source_features, target_features, target_features_out = d[9], d[10], d[11]
       local alignment = d[12]
+      local norm_alignment
+      if opt.guided_alignment == 1 then
+        replicator=nn.Replicate(alignment:size(2),2)
+        if opt.gpuid >= 0 then
+          cutorch.setDevice(opt.gpuid)
+          if opt.gpuid2 >= 0 then -- alignment is in the 2nd GPU
+            cutorch.setDevice(opt.gpuid2)
+          end
+          replicator = replicator:cuda()
+        end
+        norm_alignment = torch.cdiv(alignment, replicator:forward(torch.sum(alignment,2):squeeze(2)))
+        norm_alignment[norm_alignment:ne(norm_alignment)] = 0
+      end
 
       local encoder_grads = encoder_grad_proto[{{1, batch_l}, {1, source_l}}]
       local encoder_bwd_grads
@@ -500,7 +513,7 @@ function train(train_data, valid_data)
         local A
         if opt.guided_alignment == 1 then
           input={input, attn_outputs[t]}
-          output={output, alignment[{{},{},t}]}
+          output={output, norm_alignment[{{},{},t}]}
         end
 
         loss = loss + criterion:forward(input, output)/batch_l
@@ -766,8 +779,11 @@ function train(train_data, valid_data)
     if opt.optim == 'sgd' then --only decay with SGD
       decay_lr(epoch)
     end
+
     if opt.guided_alignment == 1 then
       opt.guided_alignment_weight = opt.guided_alignment_weight * opt.guided_alignment_decay
+      criterion.weights[1] = 1-opt.guided_alignment_weight
+      criterion.weights[2] = opt.guided_alignment_weight
     end
     -- clean and save models
     local savefile = string.format('%s_epoch%.2f_%.2f.t7', opt.savefile, epoch, score)
