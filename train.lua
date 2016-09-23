@@ -6,6 +6,17 @@ require 's2sa.data'
 require 's2sa.models'
 require 's2sa.model_utils'
 
+local idx2word_src
+local word2idx_src
+local idx2word_targ
+local word2idx_targ
+local idx2feature_src = {}
+local feature2idx_src = {}
+local idx2feature_targ = {}
+local feature2idx_targ = {}
+local info
+local idx2char
+
 cmd = torch.CmdLine()
 
 -- data files
@@ -125,6 +136,14 @@ cmd:option('-save_every', 1, [[Save every this many epochs]])
 cmd:option('-print_every', 50, [[Print stats after this many batches]])
 cmd:option('-seed', 3435, [[Seed for random initialization]])
 cmd:option('-prealloc', 1, [[Use memory preallocation and sharing between cloned encoder/decoders]])
+-- dictionary
+cmd:option('-src_dict','', [[Path to source vocabulary. If working with a preset vocab and it will 
+                           be stored in the new model. If it is undefined and we continue the training
+                           from an exsited model, we will search the stored vocab in this model and save 
+                           it in the new model]])
+cmd:option('-targ_dict','', [[Path to target vocabulary]])  
+cmd:option('-feature_dict_prefix', '', [[Prefix of the path to features vocabulary (*.feature_N.dict file)]])
+cmd:option('-char_dict', '', [[If using chars, path to character vocabulary]])
 
 function zero_table(t)
   for i = 1, #t do
@@ -143,6 +162,27 @@ function append_table(dst, src)
   for i = 1, #src do
     table.insert(dst, src[i])
   end
+end
+
+local function idx2key(file)
+  local f = io.open(file,'r')
+  local t = {}
+  for line in f:lines() do
+    local c = {}
+    for w in line:gmatch'([^%s]+)' do
+      table.insert(c, w)
+    end
+    t[tonumber(c[2])] = c[1]
+  end
+  return t
+end
+
+local function flip_table(u)
+  local t = {}
+  for key, value in pairs(u) do
+    t[value] = key
+  end
+  return t
 end
 
 function train(train_data, valid_data)
@@ -731,7 +771,10 @@ function train(train_data, valid_data)
   end
 
   local total_loss, total_nonzeros, batch_loss, batch_nonzeros, total_loss_cll, batch_loss_cll
+  local epochstartT, epochtakenT
+  local timer = torch.Timer()
   for epoch = opt.start_epoch, opt.epochs do
+    epochstartT = timer:time().real
     generator:training()
     if opt.num_shards > 0 then
       total_loss = 0
@@ -769,15 +812,42 @@ function train(train_data, valid_data)
     if opt.guided_alignment == 1 then
       opt.guided_alignment_weight = opt.guided_alignment_weight * opt.guided_alignment_decay
     end
+    -- add admin info in models
+    if opt.src_dict ~= "" then
+      idx2word_src = idx2key(opt.src_dict)
+    end
+
+    if opt.targ_dict ~= "" then
+      idx2word_targ = idx2key(opt.targ_dict)
+    end
+
+    if opt.feature_dict_prefix ~= "" then
+      idx2feature_src = {}
+      idx2feature_targ = {}
+      for i = 1, opt.num_source_features do
+        table.insert(idx2feature_src, idx2key(opt.feature_dict_prefix .. '.source_feature_' .. i .. '.dict'))
+      end
+      for i = 1, opt.num_target_features do
+        table.insert(idx2feature_targ, idx2key(opt.feature_dict_prefix .. '.target_feature_' .. i .. '.dict'))
+      end
+    end
+
+    if opt.char_dict ~= "" then
+      idx2char = idx2key(opt.char_dict)
+    end
+
+    epochtakenT = timer:time().real - epochstartT
+    info = {["LR"] = opt.learning_rate, ["time_in_minute"] = epochtakenT / 60}
+
     -- clean and save models
     local savefile = string.format('%s_epoch%.2f_%.2f.t7', opt.savefile, epoch, score)
     if epoch % opt.save_every == 0 then
       print('saving checkpoint to ' .. savefile)
       -- clean_layer(generator)
       if opt.brnn == 0 then
-        torch.save(savefile, {{encoder, decoder, generator}, opt})
+        torch.save(savefile, {{encoder, decoder, generator}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ, idx2char})
       else
-        torch.save(savefile, {{encoder, decoder, generator, encoder_bwd}, opt})
+        torch.save(savefile, {{encoder, decoder, generator, encoder_bwd}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ, idx2char})
       end
     end
   end
@@ -786,10 +856,10 @@ function train(train_data, valid_data)
   -- clean_layer(generator)
   print('saving final model to ' .. savefile)
   if opt.brnn == 0 then
-    torch.save(savefile, {{encoder:double(), decoder:double(), generator:double()}, opt})
+    torch.save(savefile, {{encoder:double(), decoder:double(), generator:double()}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ, idx2char})
   else
     torch.save(savefile, {{encoder:double(), decoder:double(), generator:double(),
-          encoder_bwd:double()}, opt})
+          encoder_bwd:double()}, opt, info, idx2word_src, idx2word_targ, idx2feature_src, idx2feature_targ, idx2char})
   end
 end
 
@@ -1014,6 +1084,43 @@ function main()
     print('loading ' .. opt.train_from .. '...')
     local checkpoint = torch.load(opt.train_from)
     local model, model_opt = checkpoint[1], checkpoint[2]
+    -- get admin info from start model
+    info = checkpoint[3] 
+    if opt.learning_rate == 0.0 then
+      opt.learning_rate = info["LR"]
+    end  
+    if opt.src_dict == "" then
+      idx2word_src = checkpoint[4]
+    else
+      idx2word_src = idx2key(opt.src_dict)
+    end
+
+    if opt.targ_dict == "" then
+      idx2word_targ = checkpoint[5]
+    else
+      idx2word_targ = idx2key(opt.targ_dict)
+    end
+
+    if opt.feature_dict_prefix == "" then
+      idx2feature_src = checkpoint[6]
+      idx2feature_targ = checkpoint[7]
+    else
+      idx2feature_src = {}
+      idx2feature_targ = {}
+      for i = 1, model_opt.num_source_features do
+        table.insert(idx2feature_src, idx2key(opt.feature_dict_prefix .. '.source_feature_' .. i .. '.dict'))
+      end
+      for i = 1, model_opt.num_target_features do
+        table.insert(idx2feature_targ, idx2key(opt.feature_dict_prefix .. '.target_feature_' .. i .. '.dict'))
+      end
+    end
+
+    if opt.char_dict == "" then
+      idx2char = checkpoint[8]
+    else
+      idx2char = idx2key(opt.char_dict)
+    end 
+
     opt.num_layers = model_opt.num_layers
     opt.rnn_size = model_opt.rnn_size
     opt.input_feed = model_opt.input_feed

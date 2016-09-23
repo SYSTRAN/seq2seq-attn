@@ -47,6 +47,8 @@ local word_vecs_dec
 local softmax_layers
 local hop_attn
 local char2idx
+local idx2char
+local info
 
 local opt = {}
 local cmd = torch.CmdLine()
@@ -56,10 +58,10 @@ cmd:option('-model', 'seq2seq_lstm_attn.t7.', [[Path to model .t7 file]])
 cmd:option('-src_file', '', [[Source sequence to decode (one line per sequence)]])
 cmd:option('-targ_file', '', [[True target sequence (optional)]])
 cmd:option('-output_file', 'pred.txt', [[Path to output the predictions (each line will be the decoded sequence]])
-cmd:option('-src_dict', 'data/demo.src.dict', [[Path to source vocabulary (*.src.dict file)]])
-cmd:option('-targ_dict', 'data/demo.targ.dict', [[Path to target vocabulary (*.targ.dict file)]])
-cmd:option('-feature_dict_prefix', 'data/demo', [[Prefix of the path to features vocabularies (*.feature_N.dict files)]])
-cmd:option('-char_dict', 'data/demo.char.dict', [[If using chars, path to character vocabulary (*.char.dict file)]])
+cmd:option('-src_dict', '', [[Path to source vocabulary (*.src.dict file)]])
+cmd:option('-targ_dict', '', [[Path to target vocabulary (*.targ.dict file)]])
+cmd:option('-feature_dict_prefix', '', [[Prefix of the path to features vocabularies (*.feature_N.dict file)]])
+cmd:option('-char_dict', '', [[If using chars, path to character vocabulary (*.char.dict file)]])
 
 -- beam search options
 cmd:option('-beam', 5,[[Beam size]])
@@ -813,7 +815,47 @@ local function init(arg, resourcesDir)
   model_opt.attn = model_opt.attn or 1
   model_opt.num_source_features = model_opt.num_source_features or 0
   model_opt.num_target_features = model_opt.num_target_features or 0
+  info = checkpoint[3]    
+  if opt.src_dict == "" then
+    idx2word_src = checkpoint[4]
+  else
+    idx2word_src = idx2key(opt.src_dict)
+  end
+  word2idx_src = flip_table(idx2word_src)  
 
+  if opt.targ_dict == "" then
+    idx2word_targ = checkpoint[5]
+  else
+    idx2word_targ = idx2key(opt.targ_dict)
+  end
+  word2idx_targ = flip_table(idx2word_targ)  
+
+  if opt.feature_dict_prefix == "" then
+    idx2feature_src = checkpoint[6]
+    idx2feature_targ = checkpoint[7]
+  else
+    idx2feature_src = {}
+    idx2feature_targ = {}
+    for i = 1, model_opt.num_source_features do
+      table.insert(idx2feature_src, idx2key(opt.feature_dict_prefix .. '.source_feature_' .. i .. '.dict'))
+    end
+    for i = 1, model_opt.num_target_features do
+      table.insert(idx2feature_targ, idx2key(opt.feature_dict_prefix .. '.target_feature_' .. i .. '.dict'))
+    end
+  end
+  for i = 1, model_opt.num_source_features do
+    table.insert(feature2idx_src, flip_table(idx2feature_src[i]))
+  end
+  for i = 1, model_opt.num_target_features do
+    table.insert(feature2idx_targ, flip_table(idx2feature_targ[i]))
+  end
+
+  if opt.char_dict == "" then
+    idx2char = checkpoint[8]
+  else
+    idx2char = idx2key(opt.char_dict)
+  end
+  char2idx = flip_table(idx2char)    
 
   if model_opt.source_features_lookup == nil then
     model_opt.source_features_lookup = {}
@@ -824,25 +866,6 @@ local function init(arg, resourcesDir)
     for _ = 1, model_opt.num_target_features do
       table.insert(model_opt.target_features_lookup, false)
     end
-  end
-
-  idx2word_src = idx2key(opt.src_dict)
-  word2idx_src = flip_table(idx2word_src)
-  idx2word_targ = idx2key(opt.targ_dict)
-  word2idx_targ = flip_table(idx2word_targ)
-
-  idx2feature_src = {}
-  feature2idx_src = {}
-  idx2feature_targ = {}
-  feature2idx_targ = {}
-
-  for i = 1, model_opt.num_source_features do
-    table.insert(idx2feature_src, idx2key(opt.feature_dict_prefix .. '.source_feature_' .. i .. '.dict'))
-    table.insert(feature2idx_src, flip_table(idx2feature_src[i]))
-  end
-  for i = 1, model_opt.num_target_features do
-    table.insert(idx2feature_targ, idx2key(opt.feature_dict_prefix .. '.target_feature_' .. i .. '.dict'))
-    table.insert(feature2idx_targ, flip_table(idx2feature_targ[i]))
   end
 
   -- load character dictionaries if needed
